@@ -14,7 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 원칙
 
-- 사진은 저장하지 않는다(기기·Storage·DB 어디에도). 캡처한 이미지는 묘사 요청에만 쓰고 버린다.
+- 사진은 기본적으로 저장하지 않는다. 캡처한 이미지는 묘사 요청에만 쓰고 버린다.
+  - 검토 중(미확정): 사용자가 "이 순간 저장해줘"라고 명시적으로 요청할 때만 묘사와 함께 사진을 저장하는 기능. 확정 전까지는 사진 저장 코드를 넣지 않는다.
 - 모든 기능은 TalkBack과 음성만으로 사용 가능해야 한다. 새 UI 요소에는 의미 있는 contentDescription/semantics를 붙이고, 시각적 피드백에만 의존하지 않는다.
 - 코드는 Kotlin + Jetpack Compose.
 
