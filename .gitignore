@@ -1,15 +1,23 @@
-*.iml
+# Gradle / build
 .gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
+.kotlin
 /build
 /captures
 .externalNativeBuild
 .cxx
+
+# Secrets (Supabase URL/anon key)
 local.properties
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code personal settings
+.claude/settings.local.json
+CLAUDE.local.md
