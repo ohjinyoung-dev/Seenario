@@ -54,3 +54,18 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 ## Database
 
 `supabase/schema.sql` is the reference schema for `user_settings` and `memories` (both keyed to `auth.users`, RLS restricting rows to `auth.uid()`, `updated_at` trigger on `user_settings`). The live tables were created manually in the Supabase dashboard, so this file is not applied automatically — when changing the schema, give the user incremental SQL to run rather than re-running the whole file. Anonymous sign-ins must be enabled in the Supabase project.
+
+## Git 협업 규칙 (Claude는 반드시 지킬 것)
+
+- **master**: 최종 배포/경진대회 제출용. 절대 직접 커밋, 푸시, 병합하지 않는다.
+- **dev**: 통합 테스트용. 직접 커밋하거나 병합하지 않고, 반드시 PR로만 합친다.
+- **작업 시작 전**: `git checkout dev` → `git pull origin dev` → 새 브랜치 생성.
+- **브랜치 이름**: `feat/기능명`(새 기능), `fix/내용`(버그), `chore/내용`(설정). 예: `feat/camera`, `feat/vui`, `feat/audio`
+- **작업이 끝나면**: 내 브랜치를 푸시하고 dev로 가는 PR을 만든다. 병합은 팀원이 확인한 뒤 사람이 직접 한다.
+- 현재 브랜치가 master나 dev인 상태에서 코드 수정을 요청받으면, 먼저 알맞은 브랜치를 만들자고 제안한다.
+- **커밋 메시지 태그**: `[Feat]` 새 기능, `[Fix]` 버그 수정, `[UI]` 레이아웃/디자인, `[Refactor]` 기능 변화 없는 구조 개선, `[Chore]` 라이브러리/빌드 설정/.gitignore 등. 메시지는 한국어로 쓴다.
+- **코드 겹침 방지**: 음성 기능은 `voice/` 폴더, 카메라/AI 기능은 `camera/` 폴더에 둔다. `MainActivity.kt`, `AndroidManifest.xml`, `libs.versions.toml`, `build.gradle.kts`는 공용 파일이므로 꼭 필요한 최소한만 수정한다.
+- **보안**
+  - Supabase URL과 publishable key는 `local.properties`에만 둔다.
+  - Gemini/Claude API 키 같은 비밀 키는 Supabase Edge Function secrets에만 둔다. 앱 코드, `build.gradle.kts`, `local.properties`에는 절대 넣지 않는다.
+  - 커밋 전에는 스테이징된 파일에 키가 없는지 확인한다.
