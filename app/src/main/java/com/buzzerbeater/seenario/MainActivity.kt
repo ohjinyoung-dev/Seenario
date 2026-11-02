@@ -2,6 +2,7 @@ package com.buzzerbeater.seenario
 
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -35,13 +36,20 @@ class MainActivity : ComponentActivity() {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     VoiceScreen(
                         state = voiceController.uiState,
-                        onTap = voiceController::onScreenTapped,
+                        onTap = voiceController::onTriggerPressed,
                         modifier = Modifier.padding(innerPadding)
                     )
                 }
             }
         }
     }
+
+    // 볼륨 아래 / 헤드셋 버튼 → 듣기 시작 (화면에 있을 때만 키 이벤트가 온다)
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        voiceController.handleKeyDown(keyCode, event) || super.onKeyDown(keyCode, event)
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        voiceController.handleKeyUp(keyCode) || super.onKeyUp(keyCode, event)
 
     private fun initSupabase() {
         val repository = UserSettingsRepository(SupabaseProvider.client)

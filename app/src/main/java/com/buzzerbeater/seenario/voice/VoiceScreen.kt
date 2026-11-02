@@ -22,9 +22,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.buzzerbeater.seenario.ui.theme.SeenarioTheme
 
+private const val NOTHING_HEARD = "화면을 누르고 말해 주세요"
+
 /**
- * 현재 음성 상태와 마지막으로 인식한 문장을 큰 글씨로 보여 준다.
- * 화면 전체가 하나의 버튼이라 어디를 탭해도(TalkBack에서는 두 번 탭) 묘사를 요청한다.
+ * 현재 음성 상태(대기 중 / 듣는 중 / 말하는 중)와 마지막으로 인식한 문장을 큰 글씨로 보여 준다.
+ * 화면 전체가 하나의 버튼이라 어디를 탭해도(TalkBack에서는 두 번 탭) 듣기를 시작한다.
  */
 @Composable
 fun VoiceScreen(
@@ -33,7 +35,7 @@ fun VoiceScreen(
     modifier: Modifier = Modifier,
 ) {
     val heard = state.lastHeard
-    val tapLabel = if (state.status == VoiceStatus.NEED_PERMISSION) "마이크 권한 다시 요청" else "풍경 묘사 요청"
+    val tapLabel = if (state.hasMicPermission) "음성 명령 말하기" else "마이크 권한 다시 요청"
 
     Column(
         modifier = modifier
@@ -54,13 +56,13 @@ fun VoiceScreen(
         )
         Spacer(Modifier.height(40.dp))
         Text(
-            text = heard?.let { "“$it”" } ?: "아직 인식한 문장이 없어요",
+            text = heard?.let { "“$it”" } ?: NOTHING_HEARD,
             fontSize = 32.sp,
             lineHeight = 40.sp,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.semantics {
-                contentDescription = heard?.let { "마지막으로 인식한 문장: $it" } ?: "아직 인식한 문장이 없어요"
+                contentDescription = heard?.let { "마지막으로 인식한 문장: $it" } ?: NOTHING_HEARD
             },
         )
     }

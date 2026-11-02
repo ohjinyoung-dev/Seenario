@@ -1,14 +1,20 @@
 package com.buzzerbeater.seenario.voice
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.speech.SpeechRecognizer
 import android.util.Log
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -17,33 +23,34 @@ enum class VoiceStatus(val label: String) {
     IDLE("대기 중"),
     LISTENING("듣는 중"),
     SPEAKING("말하는 중"),
-    NEED_PERMISSION("마이크 권한 필요"),
 }
 
 data class VoiceUiState(
     val status: VoiceStatus = VoiceStatus.IDLE,
     val lastHeard: String? = null,
+    val hasMicPermission: Boolean = true,
 )
 
 /**
- * 마이크 권한, TTS 안내, 계속 듣기, 명령 처리를 조율한다.
+ * 눌러서 말하기(push-to-talk) 방식으로 음성 명령을 처리한다.
  *
- * Activity의 onCreate에서 만들고 `lifecycle.addObserver(controller)`로 등록한다.
- * - onResume: 듣기 시작(처음이면 안내 멘트 후 시작)
- * - onStop: 듣기와 TTS 중단
- * - TTS가 말하는 동안에는 듣지 않는다.
+ * 평소에는 듣지 않고, [onTriggerPressed]가 불릴 때만 한 번 듣는다.
+ * 트리거: 화면 탭, 볼륨 아래 버튼, 이어폰/헤드셋의 재생·일시정지 버튼.
+ *
+ * Activity의 onCreate에서 만들고 `lifecycle.addObserver(controller)`로 등록한 뒤,
+ * Activity의 onKeyDown/onKeyUp에서 [handleKeyDown]/[handleKeyUp]을 불러 준다.
  */
 class VoiceController(
     private val activity: ComponentActivity,
     private val listener: VoiceCommandListener,
 ) : DefaultLifecycleObserver {
 
-    var uiState by mutableStateOf(VoiceUiState())
+    var uiState by mutableStateOf(VoiceUiState(hasMicPermission = hasPermission()))
         private set
 
     private val tts = TtsSpeaker(activity, ::onSpeakingChanged)
-    private val speech = SpeechListener(activity, ::onSpeechResults, ::onSpeechFatalError)
-    private var unavailableAnnounced = false
+    private val speech = SpeechListener(activity, ::onSpeechResults, ::onNoSpeech, ::onSpeechError)
+    private var mediaSession: MediaSession? = null
 
     private val permissionLauncher = activity.registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -53,73 +60,76 @@ class VoiceController(
         if (!hasPermission()) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
+    override fun onStart(owner: LifecycleOwner) {
+        startMediaSession()
+    }
+
     override fun onResume(owner: LifecycleOwner) {
-        startIfReady()
+        refreshPermission()
+        greetIfNeeded()
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        tts.stop()
         speech.destroy()
-        updateStatus(if (hasPermission()) VoiceStatus.IDLE else VoiceStatus.NEED_PERMISSION)
+        tts.stop()
+        releaseMediaSession()
+        updateStatus(VoiceStatus.IDLE)
     }
 
     override fun onDestroy(owner: LifecycleOwner) {
         speech.destroy()
         tts.shutdown()
+        releaseMediaSession()
     }
 
-    /** 화면 탭: 권한이 없으면 다시 요청하고, 있으면 "묘사해줘"와 똑같이 처리한다. */
-    fun onScreenTapped() {
+    /** 화면 탭, 볼륨 아래 버튼, 헤드셋 버튼이 모두 여기로 온다. 한 번 듣기를 시작한다. */
+    fun onTriggerPressed() {
         if (!hasPermission()) {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
-        Log.d(TAG, "화면 탭 → DESCRIBE")
-        handleCommand(VoiceCommand.DESCRIBE)
-    }
-
-    private fun startIfReady() {
-        if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
-        if (!hasPermission()) {
-            updateStatus(VoiceStatus.NEED_PERMISSION)
-            return
-        }
-        if (!greeted) {
-            greeted = true
-            tts.speak(GREETING)
-            return
-        }
-        if (tts.isSpeaking) return
+        if (speech.isListening) return
+        // 말하는 중에 누르면 말을 끊고 바로 듣는다.
+        if (tts.isSpeaking) tts.stop()
         if (!speech.isAvailable()) {
             Log.e(TAG, "이 기기에서 음성 인식을 사용할 수 없음")
-            updateStatus(VoiceStatus.IDLE)
-            if (!unavailableAnnounced) {
-                unavailableAnnounced = true
-                tts.speak(MSG_UNAVAILABLE)
-            }
+            tts.speak(MSG_UNAVAILABLE)
             return
         }
-        speech.start()
-        updateStatus(VoiceStatus.LISTENING)
+        Log.d(TAG, "듣기 시작")
+        speech.listenOnce()
+        if (speech.isListening) updateStatus(VoiceStatus.LISTENING)
+    }
+
+    /** 트리거 키면 소비(true)한다. 볼륨 아래 버튼을 소비하므로 볼륨이 바뀌지 않는다. */
+    fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode !in TRIGGER_KEYS) return false
+        if (event.repeatCount == 0) onTriggerPressed()
+        return true
+    }
+
+    /** 짝이 되는 key up도 소비해서 시스템이나 다른 미디어 앱으로 넘어가지 않게 한다. */
+    fun handleKeyUp(keyCode: Int): Boolean = keyCode in TRIGGER_KEYS
+
+    private fun greetIfNeeded() {
+        if (greeted || !hasPermission()) return
+        if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
+        greeted = true
+        tts.speak(GREETING)
     }
 
     private fun onPermissionResult(granted: Boolean) {
         Log.d(TAG, "마이크 권한 결과: $granted")
-        if (granted) {
-            startIfReady()
-        } else {
-            updateStatus(VoiceStatus.NEED_PERMISSION)
-            tts.speak(MSG_PERMISSION_DENIED)
-        }
+        refreshPermission()
+        if (granted) greetIfNeeded() else tts.speak(MSG_PERMISSION_DENIED)
     }
 
     private fun onSpeakingChanged(speaking: Boolean) {
         if (speaking) {
-            speech.stop()
+            speech.cancel()
             updateStatus(VoiceStatus.SPEAKING)
-        } else {
-            updateStatus(if (hasPermission()) VoiceStatus.IDLE else VoiceStatus.NEED_PERMISSION)
-            startIfReady()
+        } else if (!speech.isListening) {
+            updateStatus(VoiceStatus.IDLE)
         }
     }
 
@@ -130,11 +140,22 @@ class VoiceController(
         } ?: candidates.first()
         Log.d(TAG, "heard=\"$heard\" command=$command candidates=$candidates")
         uiState = uiState.copy(lastHeard = heard)
+        updateStatus(VoiceStatus.IDLE)
         handleCommand(command)
     }
 
-    private fun onSpeechFatalError(error: Int) {
-        updateStatus(VoiceStatus.NEED_PERMISSION)
+    private fun onNoSpeech() {
+        Log.d(TAG, "아무 말 없음, 듣기 종료")
+        updateStatus(VoiceStatus.IDLE)
+    }
+
+    private fun onSpeechError(error: Int) {
+        updateStatus(VoiceStatus.IDLE)
+        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+            refreshPermission()
+        } else {
+            tts.speak(MSG_LISTEN_FAILED)
+        }
     }
 
     private fun handleCommand(command: VoiceCommand) {
@@ -147,9 +168,51 @@ class VoiceController(
             VoiceCommand.SOUND_OFF -> tts.speak("배경 소리 끄기 명령을 받았어요")
             VoiceCommand.SAVE -> tts.speak("저장 명령을 받았어요")
             VoiceCommand.REPEAT -> tts.speak("다시 듣기 명령을 받았어요")
-            // 계속 듣고 있어서 생활 소음에도 결과가 나오므로, 모르는 문장에는 대답하지 않는다.
             VoiceCommand.UNKNOWN -> Unit
         }
+    }
+
+    /**
+     * 블루투스 헤드셋 버튼은 Activity의 onKeyDown으로 오지 않을 수 있어서,
+     * 앱이 화면에 있는 동안(onStart~onStop)만 미디어 세션으로도 받는다.
+     */
+    private fun startMediaSession() {
+        if (mediaSession != null) return
+        mediaSession = MediaSession(activity, "SeenarioVoice").apply {
+            setCallback(object : MediaSession.Callback() {
+                override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+                    val event = IntentCompat.getParcelableExtra(
+                        mediaButtonIntent, Intent.EXTRA_KEY_EVENT, KeyEvent::class.java,
+                    ) ?: return false
+                    if (event.keyCode !in TRIGGER_KEYS) return false
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        Log.d(TAG, "미디어 버튼 ${event.keyCode}")
+                        onTriggerPressed()
+                    }
+                    return true
+                }
+            })
+            setPlaybackState(
+                PlaybackState.Builder()
+                    .setActions(PlaybackState.ACTION_PLAY_PAUSE)
+                    .setState(PlaybackState.STATE_PAUSED, 0L, 1f)
+                    .build(),
+            )
+            isActive = true
+        }
+    }
+
+    private fun releaseMediaSession() {
+        mediaSession?.run {
+            isActive = false
+            release()
+        }
+        mediaSession = null
+    }
+
+    private fun refreshPermission() {
+        val granted = hasPermission()
+        if (uiState.hasMicPermission != granted) uiState = uiState.copy(hasMicPermission = granted)
     }
 
     private fun updateStatus(status: VoiceStatus) {
@@ -162,11 +225,19 @@ class VoiceController(
 
     private companion object {
         const val TAG = "SEENARIO_VOICE"
-        const val GREETING = "씨나리오가 준비됐어요. 풍경이 궁금하면 '묘사해줘'라고 말해 주세요."
+        const val GREETING =
+            "씨나리오가 준비됐어요. 화면을 누르거나 볼륨 아래 버튼을 누르고 '묘사해줘'라고 말해 주세요."
         const val MSG_PERMISSION_DENIED =
             "음성 명령을 들으려면 마이크 권한이 필요해요. 화면을 두 번 탭하면 다시 요청할게요. " +
                 "계속 거부되면 설정에서 마이크 권한을 켜 주세요."
-        const val MSG_UNAVAILABLE = "이 기기에서는 음성 인식을 사용할 수 없어요. 화면을 탭해서 묘사를 요청해 주세요."
+        const val MSG_UNAVAILABLE = "이 기기에서는 음성 인식을 사용할 수 없어요."
+        const val MSG_LISTEN_FAILED = "잘 듣지 못했어요. 다시 눌러 말해 주세요."
+
+        val TRIGGER_KEYS = setOf(
+            KeyEvent.KEYCODE_VOLUME_DOWN,
+            KeyEvent.KEYCODE_HEADSETHOOK,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+        )
 
         /** 화면 회전 등으로 Activity가 다시 만들어져도 안내 멘트는 프로세스당 한 번만. */
         var greeted = false
