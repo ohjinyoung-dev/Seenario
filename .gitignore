@@ -21,3 +21,6 @@ Thumbs.db
 # Claude Code personal settings
 .claude/settings.local.json
 CLAUDE.local.md
+
+# Supabase CLI 로컬 상태
+supabase/.temp/

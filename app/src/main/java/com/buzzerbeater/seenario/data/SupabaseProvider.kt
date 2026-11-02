@@ -4,6 +4,7 @@ import com.buzzerbeater.seenario.BuildConfig
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.functions.Functions
 import io.github.jan.supabase.postgrest.Postgrest
 
 object SupabaseProvider {
@@ -14,6 +15,7 @@ object SupabaseProvider {
         ) {
             install(Auth)
             install(Postgrest)
+            install(Functions)
         }
     }
 }
