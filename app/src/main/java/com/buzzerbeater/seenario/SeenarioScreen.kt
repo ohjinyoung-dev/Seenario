@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
@@ -140,6 +141,17 @@ class SeenarioController(
     private var requestingPermissions = false
     private var permanentlyDenied = false
 
+    /**
+     * 앱을 켜고 씨나리오가 시작 안내(권한 안내 → 시작 인사)를 읽는 동안 true.
+     * 이때는 화면의 접근성 정보를 숨겨서 TalkBack이 화면 버튼을 같이 읽지 않게 한다.
+     * 이전 화면에서 TalkBack이 읽던 말(예: 홈 화면 날씨 위젯)은 TtsSpeaker가 멈춤을 요청해서 끊는다.
+     */
+    var startupQuiet by mutableStateOf(!startupQuietDone)
+        private set
+
+    /** 시작할 때 권한이 거부되어 시작 인사 대신 거부 안내를 읽었는지. */
+    private var startupDenied by mutableStateOf(false)
+
     private val permissionLauncher = activity.registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
         ::onPermissionResult,
@@ -149,6 +161,7 @@ class SeenarioController(
         // VoiceController를 먼저 등록해서 onResume 순서가 음성 → 화면 조립이 되게 한다.
         activity.lifecycle.addObserver(voice)
         activity.lifecycle.addObserver(this)
+        if (startupQuiet) quietTalkBackDuringStartup()
     }
 
     fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean = voice.handleKeyDown(keyCode, event)
@@ -289,6 +302,21 @@ class SeenarioController(
         // 카메라만 거부된 경우는 묘사를 요청할 때 다시 안내한다.
         if (Manifest.permission.RECORD_AUDIO in denied || !voice.uiState.speechAvailable) {
             voice.speak(if (permanentlyDenied) MSG_DENIED_SETTINGS else MSG_DENIED_RETRY)
+            startupDenied = true
+        }
+    }
+
+    /**
+     * 시작 안내가 끝날 때까지 TalkBack이 화면 버튼을 읽지 않게 한다.
+     * 시작 인사(또는 권한 거부 안내)를 다 읽으면 원래대로 돌린다. TTS를 못 쓰는 기기는 바로 돌린다.
+     */
+    private fun quietTalkBackDuringStartup() {
+        activity.lifecycleScope.launch {
+            snapshotFlow { voice.uiState.greeted || startupDenied }.first { it }
+            snapshotFlow { voice.uiState.status }.first { it != VoiceStatus.SPEAKING }
+            startupQuietDone = true
+            startupQuiet = false
+            Log.d(TAG, "시작 안내 끝 → TalkBack에 화면 정보 공개")
         }
     }
 
@@ -338,6 +366,9 @@ class SeenarioController(
 
         /** 화면 회전 등으로 Activity가 다시 만들어져도 시작할 때 권한은 프로세스당 한 번만 묻는다. */
         var startupPermissionAsked = false
+
+        /** 시작 안내 중 TalkBack 숨김은 프로세스당 한 번만. */
+        var startupQuietDone = false
     }
 }
 
@@ -365,7 +396,10 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
         else -> "화면을 누르면 주변을 묘사해 드려요."
     }
 
-    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+    // 시작 안내 중에는 접근성 정보를 비워서 TalkBack이 씨나리오 TTS와 겹쳐 읽지 않게 한다.
+    // 터치는 그대로 동작한다.
+    val quiet = if (controller.startupQuiet) Modifier.clearAndSetSemantics {} else Modifier
+    Box(modifier = modifier.fillMaxSize().background(Color.Black).then(quiet)) {
         if (cameraGranted) {
             CameraStreamScreen(
                 describer = controller.describer,

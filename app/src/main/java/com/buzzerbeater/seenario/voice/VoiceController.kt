@@ -31,6 +31,8 @@ data class VoiceUiState(
     val hasMicPermission: Boolean = true,
     /** false면 음성 인식을 못 쓰는 기기라서, 누르면 바로 묘사를 요청한다. */
     val speechAvailable: Boolean = true,
+    /** 시작 안내를 읽기 시작했는지(프로세스당 한 번). */
+    val greeted: Boolean = false,
 )
 
 /**
@@ -60,7 +62,7 @@ class VoiceController(
     }
 
     var uiState by mutableStateOf(
-        VoiceUiState(hasMicPermission = hasPermission(), speechAvailable = speechAvailable),
+        VoiceUiState(hasMicPermission = hasPermission(), speechAvailable = speechAvailable, greeted = greeted),
     )
         private set
     private var mediaSession: MediaSession? = null
@@ -144,6 +146,7 @@ class VoiceController(
         if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         greeted = true
         tts.speak(if (speechAvailable) GREETING else GREETING_NO_SPEECH)
+        uiState = uiState.copy(greeted = true)
     }
 
     private fun onPermissionResult(granted: Boolean) {
