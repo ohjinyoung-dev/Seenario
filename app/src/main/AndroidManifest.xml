@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Android 11+ 패키지 가시성: 음성 인식/TTS 서비스를 찾기 위해 필요 -->
     <queries>

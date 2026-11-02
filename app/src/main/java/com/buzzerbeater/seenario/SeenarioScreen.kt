@@ -3,7 +3,13 @@ package com.buzzerbeater.seenario
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.net.Uri
+import android.os.Build
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
@@ -39,9 +45,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -76,6 +80,9 @@ private const val TAG = "SEENARIO"
 
 /** 이만큼 누르고 있으면 듣지 않고 바로 묘사한다. */
 private const val LONG_PRESS_DESCRIBE_MS = 1_000L
+
+/** 길게 눌러 바로 묘사할 때 진동 길이. */
+private const val LONG_PRESS_VIBRATION_MS = 150L
 
 /** 화면 위쪽에 보여 주는 상태. 음성 상태([VoiceStatus])에 "살펴보는 중"을 더했다. */
 enum class SeenarioStatus(val label: String) {
@@ -150,6 +157,35 @@ class SeenarioController(
         if (!startupPermissionAsked) {
             startupPermissionAsked = true
             requestPermissions()
+        }
+    }
+
+    /**
+     * 화면을 길게 눌렀을 때(TalkBack에서는 두 번 탭하고 누르고 있기). 진동으로 알리고 바로 묘사한다.
+     * 터치 피드백 진동은 시스템 '터치 시 진동' 설정이 꺼져 있으면 무시되므로,
+     * 진동 용도를 접근성으로 지정해서 울린다.
+     */
+    fun onLongPressDescribe() {
+        vibrate()
+        onDescribeRequested()
+    }
+
+    private fun vibrate() {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            activity.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            activity.getSystemService(Vibrator::class.java)
+        }
+        if (vibrator?.hasVibrator() != true) return
+        val effect = VibrationEffect.createOneShot(LONG_PRESS_VIBRATION_MS, VibrationEffect.DEFAULT_AMPLITUDE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ACCESSIBILITY))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(
+                effect,
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).build(),
+            )
         }
     }
 
@@ -324,8 +360,6 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
         else -> "화면을 누르면 주변을 묘사해 드려요."
     }
 
-    val haptic = LocalHapticFeedback.current
-
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         if (cameraGranted) {
             CameraStreamScreen(
@@ -357,8 +391,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
                             // 1초 전에 취소(손가락이 화면 밖으로 나감 등)되면 아무것도 하지 않는다.
                             cancelled -> Unit
                             else -> {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                controller.onDescribeRequested()
+                                controller.onLongPressDescribe()
                                 waitForUpOrCancellation()?.consume()
                             }
                         }
@@ -372,7 +405,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
                         true
                     }
                     onLongClick(label = "바로 풍경 묘사") {
-                        controller.onDescribeRequested()
+                        controller.onLongPressDescribe()
                         true
                     }
                 },
