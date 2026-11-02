@@ -29,6 +29,8 @@ data class VoiceUiState(
     val status: VoiceStatus = VoiceStatus.IDLE,
     val lastHeard: String? = null,
     val hasMicPermission: Boolean = true,
+    /** false면 음성 인식을 못 쓰는 기기라서, 누르면 바로 묘사를 요청한다. */
+    val speechAvailable: Boolean = true,
 )
 
 /**
@@ -45,11 +47,18 @@ class VoiceController(
     private val listener: VoiceCommandListener,
 ) : DefaultLifecycleObserver {
 
-    var uiState by mutableStateOf(VoiceUiState(hasMicPermission = hasPermission()))
-        private set
-
     private val tts = TtsSpeaker(activity, ::onSpeakingChanged)
     private val speech = SpeechListener(activity, ::onSpeechResults, ::onNoSpeech, ::onSpeechError)
+
+    /** 음성 인식 서비스가 없는 기기면 false. 이때는 누르면 바로 묘사를 요청한다(대체 동작). */
+    private val speechAvailable = speech.isAvailable().also {
+        if (!it) Log.w(TAG, "이 기기에서 음성 인식을 사용할 수 없음 → 탭하면 바로 묘사 요청")
+    }
+
+    var uiState by mutableStateOf(
+        VoiceUiState(hasMicPermission = hasPermission(), speechAvailable = speechAvailable),
+    )
+        private set
     private var mediaSession: MediaSession? = null
 
     private val permissionLauncher = activity.registerForActivityResult(
@@ -57,7 +66,8 @@ class VoiceController(
     ) { granted -> onPermissionResult(granted) }
 
     override fun onCreate(owner: LifecycleOwner) {
-        if (!hasPermission()) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        // 음성 인식을 못 쓰면 마이크 권한도 필요 없다.
+        if (speechAvailable && !hasPermission()) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     override fun onStart(owner: LifecycleOwner) {
@@ -82,8 +92,16 @@ class VoiceController(
         releaseMediaSession()
     }
 
-    /** 화면 탭, 볼륨 아래 버튼, 헤드셋 버튼이 모두 여기로 온다. 한 번 듣기를 시작한다. */
+    /**
+     * 화면 탭, 볼륨 아래 버튼, 헤드셋 버튼이 모두 여기로 온다. 한 번 듣기를 시작한다.
+     * 음성 인식을 못 쓰는 기기에서는 대신 바로 묘사를 요청한다.
+     */
     fun onTriggerPressed() {
+        if (!speechAvailable) {
+            Log.d(TAG, "음성 인식 미지원 → 바로 DESCRIBE")
+            handleCommand(VoiceCommand.DESCRIBE)
+            return
+        }
         if (!hasPermission()) {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             return
@@ -91,11 +109,6 @@ class VoiceController(
         if (speech.isListening) return
         // 말하는 중에 누르면 말을 끊고 바로 듣는다.
         if (tts.isSpeaking) tts.stop()
-        if (!speech.isAvailable()) {
-            Log.e(TAG, "이 기기에서 음성 인식을 사용할 수 없음")
-            tts.speak(MSG_UNAVAILABLE)
-            return
-        }
         Log.d(TAG, "듣기 시작")
         speech.listenOnce()
         if (speech.isListening) updateStatus(VoiceStatus.LISTENING)
@@ -112,10 +125,12 @@ class VoiceController(
     fun handleKeyUp(keyCode: Int): Boolean = keyCode in TRIGGER_KEYS
 
     private fun greetIfNeeded() {
-        if (greeted || !hasPermission()) return
+        if (greeted) return
+        // 음성 인식을 쓰는 기기는 마이크 권한을 받은 뒤에 안내한다.
+        if (speechAvailable && !hasPermission()) return
         if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         greeted = true
-        tts.speak(GREETING)
+        tts.speak(if (speechAvailable) GREETING else GREETING_NO_SPEECH)
     }
 
     private fun onPermissionResult(granted: Boolean) {
@@ -230,7 +245,7 @@ class VoiceController(
         const val MSG_PERMISSION_DENIED =
             "음성 명령을 들으려면 마이크 권한이 필요해요. 화면을 두 번 탭하면 다시 요청할게요. " +
                 "계속 거부되면 설정에서 마이크 권한을 켜 주세요."
-        const val MSG_UNAVAILABLE = "이 기기에서는 음성 인식을 사용할 수 없어요."
+        const val GREETING_NO_SPEECH = "화면을 누르면 주변을 묘사해 드려요."
         const val MSG_LISTEN_FAILED = "잘 듣지 못했어요. 다시 눌러 말해 주세요."
 
         val TRIGGER_KEYS = setOf(

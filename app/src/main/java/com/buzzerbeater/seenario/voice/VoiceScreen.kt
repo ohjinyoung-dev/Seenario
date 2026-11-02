@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.buzzerbeater.seenario.ui.theme.SeenarioTheme
 
 private const val NOTHING_HEARD = "화면을 누르고 말해 주세요"
+private const val NO_SPEECH_HINT = "화면을 누르면 주변을 묘사해 드려요"
 
 /**
  * 현재 음성 상태(대기 중 / 듣는 중 / 말하는 중)와 마지막으로 인식한 문장을 큰 글씨로 보여 준다.
@@ -35,7 +36,12 @@ fun VoiceScreen(
     modifier: Modifier = Modifier,
 ) {
     val heard = state.lastHeard
-    val tapLabel = if (state.hasMicPermission) "음성 명령 말하기" else "마이크 권한 다시 요청"
+    val tapLabel = when {
+        !state.speechAvailable -> "풍경 묘사 요청"
+        state.hasMicPermission -> "음성 명령 말하기"
+        else -> "마이크 권한 다시 요청"
+    }
+    val placeholder = if (state.speechAvailable) NOTHING_HEARD else NO_SPEECH_HINT
 
     Column(
         modifier = modifier
@@ -56,13 +62,13 @@ fun VoiceScreen(
         )
         Spacer(Modifier.height(40.dp))
         Text(
-            text = heard?.let { "“$it”" } ?: NOTHING_HEARD,
+            text = heard?.let { "“$it”" } ?: placeholder,
             fontSize = 32.sp,
             lineHeight = 40.sp,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.semantics {
-                contentDescription = heard?.let { "마지막으로 인식한 문장: $it" } ?: NOTHING_HEARD
+                contentDescription = heard?.let { "마지막으로 인식한 문장: $it" } ?: placeholder
             },
         )
     }
