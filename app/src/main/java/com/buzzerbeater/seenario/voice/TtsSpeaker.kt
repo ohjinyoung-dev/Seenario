@@ -23,7 +23,8 @@ class TtsSpeaker(
     private val onSpeakingChanged: (Boolean) -> Unit,
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val talkBack = TalkBackSpeechMonitor(context.applicationContext, mainHandler)
+    private val talkBack: TalkBackSpeechMonitor =
+        TalkBackSpeechMonitor(context.applicationContext, mainHandler, ::onTalkBackStarted)
     private val pending = ArrayDeque<String>()
     private var ready = false
     private var failed = false
@@ -79,13 +80,15 @@ class TtsSpeaker(
     /** 엔진이 준비됐고 TalkBack이 조용하면(또는 너무 오래 기다렸으면) 대기 중인 문장을 말한다. */
     private fun flushPending() {
         if (!ready || pending.isEmpty()) return
+        // TalkBack은 문장 사이에 잠깐 쉬므로, 조용해 보여도 줄 서 있는 말이 있을 수 있다.
+        // 그래서 말하기 전에는 항상 한 번 멈춤을 요청해 줄 서 있는 말까지 버리게 한다.
+        if (!interruptedTalkBack && talkBack.isEnabled) {
+            Log.d(TAG, "말하기 전에 TalkBack 멈춤 요청")
+            talkBack.interrupt()
+            interruptedTalkBack = true
+        }
         val waited = SystemClock.uptimeMillis() - waitStartedAt
         if (waited < MAX_TALKBACK_WAIT_MS && talkBack.isSpeaking(TALKBACK_QUIET_MS)) {
-            if (!interruptedTalkBack) {
-                Log.d(TAG, "TalkBack이 말하는 중 → 멈춤 요청")
-                talkBack.interrupt()
-                interruptedTalkBack = true
-            }
             mainHandler.postDelayed(flushPendingRunnable, TALKBACK_POLL_MS)
             return
         }
@@ -93,6 +96,13 @@ class TtsSpeaker(
         val text = pending.removeLast()
         pending.clear()
         speakNow(text)
+    }
+
+    /** 씨나리오가 말하는 도중에 TalkBack이 말을 시작하면(줄 서 있던 이전 화면의 말, 창 제목 등) 다시 멈춘다. */
+    private fun onTalkBackStarted() {
+        if (currentUtteranceId == null) return
+        Log.d(TAG, "씨나리오가 말하는 중에 TalkBack이 말을 시작함 → 멈춤 요청")
+        talkBack.interrupt()
     }
 
     private fun onInit(status: Int) {
