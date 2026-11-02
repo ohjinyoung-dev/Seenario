@@ -84,6 +84,9 @@ private const val LONG_PRESS_DESCRIBE_MS = 1_000L
 /** 길게 눌러 바로 묘사할 때 진동 길이. */
 private const val LONG_PRESS_VIBRATION_MS = 150L
 
+/** 진동 세기 최댓값(1~255). */
+private const val MAX_AMPLITUDE = 255
+
 /** 화면 위쪽에 보여 주는 상태. 음성 상태([VoiceStatus])에 "살펴보는 중"을 더했다. */
 enum class SeenarioStatus(val label: String) {
     IDLE("대기 중"),
@@ -177,7 +180,9 @@ class SeenarioController(
             activity.getSystemService(Vibrator::class.java)
         }
         if (vibrator?.hasVibrator() != true) return
-        val effect = VibrationEffect.createOneShot(LONG_PRESS_VIBRATION_MS, VibrationEffect.DEFAULT_AMPLITUDE)
+        // 세기를 조절할 수 있는 기기면 최대 세기로, 아니면 기본 세기로 울린다.
+        val amplitude = if (vibrator.hasAmplitudeControl()) MAX_AMPLITUDE else VibrationEffect.DEFAULT_AMPLITUDE
+        val effect = VibrationEffect.createOneShot(LONG_PRESS_VIBRATION_MS, amplitude)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ACCESSIBILITY))
         } else {
