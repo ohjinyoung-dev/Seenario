@@ -143,7 +143,9 @@ class SeenarioController(
 
     /**
      * 앱을 켜고 씨나리오가 시작 안내(권한 안내 → 시작 인사)를 읽는 동안 true.
-     * 이때는 화면의 접근성 정보를 숨기고 창 제목을 비워서 TalkBack이 같이 읽지 않게 한다.
+     * 이때는 화면의 접근성 정보를 숨겨서 TalkBack이 화면 버튼을 같이 읽지 않게 한다.
+     * 창 제목("씨나리오")은 남겨 둔다. TalkBack이 새 창 제목을 읽으면서 이전 화면에서 읽던 말을 끊기 때문이다.
+     * 제목을 읽는 동안은 TtsSpeaker가 기다렸다가 시작 안내를 읽는다.
      */
     var startupQuiet by mutableStateOf(!startupQuietDone)
         private set
@@ -306,17 +308,15 @@ class SeenarioController(
     }
 
     /**
-     * 시작 안내가 끝날 때까지 TalkBack이 창 제목("씨나리오")과 화면 버튼을 읽지 않게 한다.
+     * 시작 안내가 끝날 때까지 TalkBack이 화면 버튼을 읽지 않게 한다.
      * 시작 인사(또는 권한 거부 안내)를 다 읽으면 원래대로 돌린다. TTS를 못 쓰는 기기는 바로 돌린다.
      */
     private fun quietTalkBackDuringStartup() {
-        activity.title = ""
         activity.lifecycleScope.launch {
             snapshotFlow { voice.uiState.greeted || startupDenied }.first { it }
             snapshotFlow { voice.uiState.status }.first { it != VoiceStatus.SPEAKING }
             startupQuietDone = true
             startupQuiet = false
-            activity.title = activity.getString(R.string.app_name)
             Log.d(TAG, "시작 안내 끝 → TalkBack에 화면 정보 공개")
         }
     }
