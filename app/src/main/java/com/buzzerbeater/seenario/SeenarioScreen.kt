@@ -3,14 +3,22 @@ package com.buzzerbeater.seenario
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.net.Uri
+import android.os.Build
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -37,10 +45,14 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -66,6 +78,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "SEENARIO"
 
+/** 이만큼 누르고 있으면 듣지 않고 바로 묘사한다. */
+private const val LONG_PRESS_DESCRIBE_MS = 1_000L
+
+/** 길게 눌러 바로 묘사할 때 진동 길이. */
+private const val LONG_PRESS_VIBRATION_MS = 150L
+
+/** 진동 세기 최댓값(1~255). */
+private const val MAX_AMPLITUDE = 255
+
 /** 화면 위쪽에 보여 주는 상태. 음성 상태([VoiceStatus])에 "살펴보는 중"을 더했다. */
 enum class SeenarioStatus(val label: String) {
     IDLE("대기 중"),
@@ -77,7 +98,7 @@ enum class SeenarioStatus(val label: String) {
 /**
  * 음성 모듈(voice/)과 카메라 모듈(camera/)을 잇는다.
  *
- * 흐름: 화면 탭/볼륨 아래 버튼 → 듣기 → "묘사해줘" → [DescribeTrigger.request] → 카메라 캡처
+ * 흐름: 화면 탭 → 듣기 → "묘사해줘"(또는 화면 1초 길게 누르기) → [DescribeTrigger.request] → 카메라 캡처
  * → Gemini 묘사 → 아래쪽에 텍스트 표시 + TTS 낭독 → 대기 중.
  *
  * 카메라·마이크 권한도 여기서 한 번에 요청한다. Activity의 onCreate에서 만든다.
@@ -139,6 +160,37 @@ class SeenarioController(
         if (!startupPermissionAsked) {
             startupPermissionAsked = true
             requestPermissions()
+        }
+    }
+
+    /**
+     * 화면을 길게 눌렀을 때(TalkBack에서는 두 번 탭하고 누르고 있기). 진동으로 알리고 바로 묘사한다.
+     * 터치 피드백 진동은 시스템 '터치 시 진동' 설정이 꺼져 있으면 무시되므로,
+     * 진동 용도를 접근성으로 지정해서 울린다.
+     */
+    fun onLongPressDescribe() {
+        vibrate()
+        onDescribeRequested()
+    }
+
+    private fun vibrate() {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            activity.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            activity.getSystemService(Vibrator::class.java)
+        }
+        if (vibrator?.hasVibrator() != true) return
+        // 세기를 조절할 수 있는 기기면 최대 세기로, 아니면 기본 세기로 울린다.
+        val amplitude = if (vibrator.hasAmplitudeControl()) MAX_AMPLITUDE else VibrationEffect.DEFAULT_AMPLITUDE
+        val effect = VibrationEffect.createOneShot(LONG_PRESS_VIBRATION_MS, amplitude)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ACCESSIBILITY))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(
+                effect,
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY).build(),
+            )
         }
     }
 
@@ -295,6 +347,7 @@ class SeenarioController(
  * - 위쪽: 상태와 마지막으로 인식한 말
  * - 아래쪽: 묘사 결과
  * 화면 어디를 탭해도(TalkBack에서는 두 번 탭) 듣기를 시작한다. 탭은 이 화면에서만 처리한다.
+ * 1초 이상 누르고 있으면(TalkBack에서는 두 번 탭하고 누르고 있기) 듣지 않고 바로 묘사한다.
  */
 @Composable
 fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier) {
@@ -308,7 +361,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
     }
     val hint = when {
         missing.isNotEmpty() -> "권한이 필요해요. 화면을 누르면 다시 물어볼게요."
-        voiceState.speechAvailable -> "화면을 누르거나 볼륨 아래 버튼을 누르고 '묘사해줘'라고 말해 주세요."
+        voiceState.speechAvailable -> "화면을 누르고 '묘사해줘'라고 말해 주세요. 1초 동안 길게 누르면 바로 묘사해 드려요."
         else -> "화면을 누르면 주변을 묘사해 드려요."
     }
 
@@ -324,11 +377,43 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
         }
 
         // 탭 영역은 글자 아래에 깔아서, 글자 위를 눌러도 여기로 온다.
+        // 짧게 누르면 듣기, 1초 이상 누르고 있으면 손을 떼기 전에 바로 묘사(진동으로 알림).
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .clickable(onClickLabel = tapLabel, role = Role.Button, onClick = controller.voice::onTriggerPressed)
-                .semantics { contentDescription = "화면 전체 버튼" },
+                .pointerInput(controller) {
+                    awaitEachGesture {
+                        awaitFirstDown()
+                        var cancelled = false
+                        val up = withTimeoutOrNull(LONG_PRESS_DESCRIBE_MS) {
+                            waitForUpOrCancellation().also { if (it == null) cancelled = true }
+                        }
+                        when {
+                            up != null -> {
+                                up.consume()
+                                controller.voice.onTriggerPressed()
+                            }
+                            // 1초 전에 취소(손가락이 화면 밖으로 나감 등)되면 아무것도 하지 않는다.
+                            cancelled -> Unit
+                            else -> {
+                                controller.onLongPressDescribe()
+                                waitForUpOrCancellation()?.consume()
+                            }
+                        }
+                    }
+                }
+                .semantics {
+                    contentDescription = "화면 전체 버튼"
+                    role = Role.Button
+                    onClick(label = tapLabel) {
+                        controller.voice.onTriggerPressed()
+                        true
+                    }
+                    onLongClick(label = "바로 풍경 묘사") {
+                        controller.onLongPressDescribe()
+                        true
+                    }
+                },
         )
 
         StatusPanel(
