@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // 볼륨 아래 / 헤드셋 버튼 → 듣기 시작 (화면에 있을 때만 키 이벤트가 온다)
+    // 헤드셋 버튼 → 듣기 시작 (화면에 있을 때만 키 이벤트가 온다)
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
         seenario.handleKeyDown(keyCode, event) || super.onKeyDown(keyCode, event)
 

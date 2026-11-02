@@ -37,7 +37,7 @@ data class VoiceUiState(
  * 눌러서 말하기(push-to-talk) 방식으로 음성 명령을 처리한다.
  *
  * 평소에는 듣지 않고, [onTriggerPressed]가 불릴 때만 한 번 듣는다.
- * 트리거: 화면 탭, 볼륨 아래 버튼, 이어폰/헤드셋의 재생·일시정지 버튼.
+ * 트리거: 화면 탭, 이어폰/헤드셋의 재생·일시정지 버튼. 볼륨 키는 볼륨 조절에 그대로 둔다.
  *
  * Activity의 onCreate에서 만들고 `lifecycle.addObserver(controller)`로 등록한 뒤,
  * Activity의 onKeyDown/onKeyUp에서 [handleKeyDown]/[handleKeyUp]을 불러 준다.
@@ -99,7 +99,7 @@ class VoiceController(
     }
 
     /**
-     * 화면 탭, 볼륨 아래 버튼, 헤드셋 버튼이 모두 여기로 온다. 한 번 듣기를 시작한다.
+     * 화면 탭과 헤드셋 버튼이 여기로 온다. 한 번 듣기를 시작한다.
      * 음성 인식을 못 쓰는 기기에서는 대신 바로 묘사를 요청한다.
      */
     fun onTriggerPressed() {
@@ -127,7 +127,7 @@ class VoiceController(
     /** 안내 문장을 읽는다. 이전 문장은 끊는다. 말하는 동안 [uiState]의 상태는 SPEAKING이다. */
     fun speak(text: String) = tts.speak(text)
 
-    /** 트리거 키면 소비(true)한다. 볼륨 아래 버튼을 소비하므로 볼륨이 바뀌지 않는다. */
+    /** 트리거 키(헤드셋 버튼)면 소비(true)한다. 볼륨 키는 소비하지 않으므로 볼륨이 그대로 조절된다. */
     fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode !in TRIGGER_KEYS) return false
         if (event.repeatCount == 0) onTriggerPressed()
@@ -251,7 +251,8 @@ class VoiceController(
     private companion object {
         const val TAG = "SEENARIO_VOICE"
         const val GREETING =
-            "씨나리오가 준비됐어요. 화면을 누르거나 볼륨 아래 버튼을 누르고 '묘사해줘'라고 말해 주세요."
+            "씨나리오가 준비됐어요. 화면을 누르고 '묘사해줘'라고 말해 주세요. " +
+                "시끄러운 곳에서는 화면을 1초 동안 길게 누르면 바로 묘사해 드려요."
         const val MSG_PERMISSION_DENIED =
             "음성 명령을 들으려면 마이크 권한이 필요해요. 화면을 두 번 탭하면 다시 요청할게요. " +
                 "계속 거부되면 설정에서 마이크 권한을 켜 주세요."
@@ -259,7 +260,6 @@ class VoiceController(
         const val MSG_LISTEN_FAILED = "잘 듣지 못했어요. 다시 눌러 말해 주세요."
 
         val TRIGGER_KEYS = setOf(
-            KeyEvent.KEYCODE_VOLUME_DOWN,
             KeyEvent.KEYCODE_HEADSETHOOK,
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
         )
