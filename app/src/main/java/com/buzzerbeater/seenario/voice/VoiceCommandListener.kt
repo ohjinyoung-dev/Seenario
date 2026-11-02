@@ -8,4 +8,7 @@ package com.buzzerbeater.seenario.voice
 fun interface VoiceCommandListener {
     /** 사용자가 "묘사해줘"라고 말했거나 화면을 탭했을 때 호출된다. */
     fun onDescribeRequested()
+
+    /** 사용자가 "다시 들려줘"라고 말했을 때 호출된다. */
+    fun onRepeatRequested() {}
 }
