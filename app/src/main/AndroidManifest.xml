@@ -38,4 +38,11 @@
         </activity>
     </application>
 
+    <!-- 카메라(풍경 캡처) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="true" />
+
 </manifest>
