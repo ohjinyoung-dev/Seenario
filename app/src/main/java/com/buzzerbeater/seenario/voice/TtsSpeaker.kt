@@ -15,8 +15,8 @@ import java.util.Locale
  * [speak]를 부르는 즉시 "말하는 중"으로 바뀐다. 그래야 음성 인식이 TTS 시작 전에
  * 재시작되어 자기 목소리를 듣는 일이 없다. 새 문장은 이전 문장을 끊고 말한다.
  *
- * TalkBack이 말하는 중이면 끝날 때까지(최대 [MAX_TALKBACK_WAIT_MS]) 기다렸다가 말해서 두 목소리가 겹치지 않게 한다.
- * 예: 앱 아이콘을 두 번 탭해 실행하면 TalkBack이 아이콘 이름을 읽는 중에 시작 인사가 나오는 경우.
+ * TalkBack이 말하는 중이면 멈춰 달라고 요청하고, 조용해진 뒤에(최대 [MAX_TALKBACK_WAIT_MS]) 말해서
+ * 두 목소리가 겹치지 않게 한다. 예: 홈 화면 날씨 위젯을 TalkBack이 길게 읽는 중에 앱을 실행한 경우.
  */
 class TtsSpeaker(
     context: Context,

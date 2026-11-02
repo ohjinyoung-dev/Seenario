@@ -12,9 +12,10 @@ import android.view.accessibility.AccessibilityManager
 /**
  * TalkBack 같은 화면 낭독기가 지금 말하고 있는지 알려 준다.
  *
- * 앱이 TalkBack의 말을 멈출 수는 없으므로, 씨나리오 TTS는 TalkBack이 말을 마칠 때까지 기다렸다가 말한다.
+ * 씨나리오 TTS는 TalkBack이 말하는 중이면 [interrupt]로 멈추게 한 뒤, 조용해지면 말한다.
  * TalkBack 음성은 `USAGE_ASSISTANCE_ACCESSIBILITY` 용도로 재생되므로, 그 용도의 재생이 있는지로 판단한다.
- * 재생 상태(isActive)는 Android 11(API 30)부터 볼 수 있어서, 그보다 낮은 기기에서는 기다리지 않는다.
+ * 재생 상태 콜백은 지금 재생 중인 플레이어만 넘겨 준다(Android 15에서 확인). 그보다 오래된 기기에서의 동작은
+ * 확인하지 못해서, Android 11(API 30) 미만에서는 TalkBack을 기다리거나 멈추지 않고 바로 말한다.
  */
 class TalkBackSpeechMonitor(context: Context, handler: Handler) {
 

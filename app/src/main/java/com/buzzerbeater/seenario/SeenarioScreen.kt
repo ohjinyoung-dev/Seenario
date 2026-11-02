@@ -144,8 +144,7 @@ class SeenarioController(
     /**
      * 앱을 켜고 씨나리오가 시작 안내(권한 안내 → 시작 인사)를 읽는 동안 true.
      * 이때는 화면의 접근성 정보를 숨겨서 TalkBack이 화면 버튼을 같이 읽지 않게 한다.
-     * 창 제목("씨나리오")은 남겨 둔다. TalkBack이 새 창 제목을 읽으면서 이전 화면에서 읽던 말을 끊기 때문이다.
-     * 제목을 읽는 동안은 TtsSpeaker가 기다렸다가 시작 안내를 읽는다.
+     * 이전 화면에서 TalkBack이 읽던 말(예: 홈 화면 날씨 위젯)은 TtsSpeaker가 멈춤을 요청해서 끊는다.
      */
     var startupQuiet by mutableStateOf(!startupQuietDone)
         private set
