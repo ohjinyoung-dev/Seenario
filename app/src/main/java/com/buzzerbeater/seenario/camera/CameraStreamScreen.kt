@@ -13,8 +13,6 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,7 +31,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -55,8 +52,8 @@ private const val TAG = "SEENARIO"
 
 /**
  * 카메라 권한을 확인하고 후면 카메라 미리보기를 띄운다.
- * 화면을 탭하거나(TalkBack에서는 두 번 탭) [trigger]로 요청이 오면 가장 최근 프레임을 [describer]로 보내
- * 풍경 묘사를 하단에 보여주고 [onDescribed]로 알려준다(TTS 연결용).
+ * [trigger]로 요청이 오면 가장 최근 프레임을 [describer]로 보내 결과를 [onDescribed]로 알려준다.
+ * 실패하면 [onError]를 부른다. 탭 처리와 결과 표시·낭독은 화면 조립 쪽(SeenarioScreen)에서 한다.
  */
 @Composable
 fun CameraStreamScreen(
@@ -64,6 +61,7 @@ fun CameraStreamScreen(
     modifier: Modifier = Modifier,
     trigger: DescribeTrigger = remember { DescribeTrigger() },
     onDescribed: (String) -> Unit = {},
+    onError: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val activity = LocalActivity.current
@@ -103,7 +101,7 @@ fun CameraStreamScreen(
     }
 
     if (hasPermission) {
-        CameraStream(describer, trigger, onDescribed, modifier)
+        CameraStream(describer, trigger, onDescribed, onError, modifier)
     } else {
         PermissionRequest(
             permanentlyDenied = permanentlyDenied,
@@ -129,6 +127,7 @@ private fun CameraStream(
     describer: SceneDescriber,
     trigger: DescribeTrigger,
     onDescribed: (String) -> Unit,
+    onError: () -> Unit,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -187,7 +186,9 @@ private fun CameraStream(
         if (state is DescribeState.Loading) return
         val frame = latestFrame
         if (frame == null) {
+            Log.w(TAG, "Describe skipped: no frame yet")
             state = DescribeState.Error("카메라가 아직 준비 중이에요. 잠시 후 다시 눌러 주세요.")
+            onError()
             return
         }
         state = DescribeState.Loading
@@ -198,6 +199,7 @@ private fun CameraStream(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Describe failed", e)
+                onError()
                 DescribeState.Error("풍경을 묘사하지 못했어요. 다시 한 번 눌러 주세요.")
             }
         }
@@ -207,23 +209,8 @@ private fun CameraStream(
         trigger.requests.collect { describeNow() }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .clickable(onClickLabel = "지금 풍경 묘사 듣기") { describeNow() },
-    ) {
+    Box(modifier = modifier.fillMaxSize()) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        Text(
-            text = state.message,
-            style = MaterialTheme.typography.titleLarge,
-            color = Color.White,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.75f))
-                .padding(horizontal = 24.dp, vertical = 20.dp)
-                .semantics { liveRegion = LiveRegionMode.Polite },
-        )
     }
 }
 

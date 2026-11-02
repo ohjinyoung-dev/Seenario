@@ -41,10 +41,14 @@ data class VoiceUiState(
  *
  * Activity의 onCreate에서 만들고 `lifecycle.addObserver(controller)`로 등록한 뒤,
  * Activity의 onKeyDown/onKeyUp에서 [handleKeyDown]/[handleKeyUp]을 불러 준다.
+ *
+ * [requestPermissions]를 넘기면 마이크 권한 요청을 직접 하지 않고 그쪽에 맡긴다
+ * (카메라와 마이크 권한을 한 번에 묻기 위해). 이때는 시작할 때 자동으로 권한을 묻지 않는다.
  */
 class VoiceController(
     private val activity: ComponentActivity,
     private val listener: VoiceCommandListener,
+    private val requestPermissions: (() -> Unit)? = null,
 ) : DefaultLifecycleObserver {
 
     private val tts = TtsSpeaker(activity, ::onSpeakingChanged)
@@ -67,7 +71,9 @@ class VoiceController(
 
     override fun onCreate(owner: LifecycleOwner) {
         // 음성 인식을 못 쓰면 마이크 권한도 필요 없다.
-        if (speechAvailable && !hasPermission()) permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        if (requestPermissions == null && speechAvailable && !hasPermission()) {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     override fun onStart(owner: LifecycleOwner) {
@@ -103,7 +109,11 @@ class VoiceController(
             return
         }
         if (!hasPermission()) {
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            if (requestPermissions != null) {
+                requestPermissions.invoke()
+            } else {
+                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
             return
         }
         if (speech.isListening) return
@@ -113,6 +123,9 @@ class VoiceController(
         speech.listenOnce()
         if (speech.isListening) updateStatus(VoiceStatus.LISTENING)
     }
+
+    /** 안내 문장을 읽는다. 이전 문장은 끊는다. 말하는 동안 [uiState]의 상태는 SPEAKING이다. */
+    fun speak(text: String) = tts.speak(text)
 
     /** 트리거 키면 소비(true)한다. 볼륨 아래 버튼을 소비하므로 볼륨이 바뀌지 않는다. */
     fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -175,14 +188,11 @@ class VoiceController(
 
     private fun handleCommand(command: VoiceCommand) {
         when (command) {
-            VoiceCommand.DESCRIBE -> {
-                tts.speak("묘사 명령을 받았어요")
-                listener.onDescribeRequested()
-            }
+            VoiceCommand.DESCRIBE -> listener.onDescribeRequested()
             VoiceCommand.SOUND_ON -> tts.speak("배경 소리 켜기 명령을 받았어요")
             VoiceCommand.SOUND_OFF -> tts.speak("배경 소리 끄기 명령을 받았어요")
             VoiceCommand.SAVE -> tts.speak("저장 명령을 받았어요")
-            VoiceCommand.REPEAT -> tts.speak("다시 듣기 명령을 받았어요")
+            VoiceCommand.REPEAT -> listener.onRepeatRequested()
             VoiceCommand.UNKNOWN -> Unit
         }
     }

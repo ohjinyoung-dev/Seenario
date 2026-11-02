@@ -12,6 +12,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **묘사 저장**: 좋았던 묘사와 상황 태그를 `memories` 테이블에 저장해 나중에 다시 듣는다.
 - **백엔드**: Supabase(익명 로그인, PostgreSQL, RLS). AI 호출(Gemini 장면 분석, Claude 문장 생성)은 **Supabase Edge Function에서만** 하고, AI API 키는 절대 앱에 넣지 않는다. 앱에는 Supabase URL/anon key만 둔다.
 
+### 전체 사용 흐름 (현재 구현)
+
+1. 앱 실행 → 빠진 권한이 있으면 TTS로 "곧 카메라와 마이크 권한을 묻는 창이 떠요. '앱 사용 중에만 허용'을 선택해 주세요." 안내 후 카메라·마이크 권한을 한 번에 요청한다.
+2. 권한이 있으면 카메라 미리보기가 화면 전체에 켜지고, 시작 안내를 TTS로 읽는다.
+3. 화면 탭 / 볼륨 아래 버튼 / 이어폰 버튼 → 한 번 듣기(눌러서 말하기). 상태: "듣는 중".
+4. "묘사해줘" → TTS "잠시만요, 주변을 살펴볼게요." + 상태 "살펴보는 중" → `DescribeTrigger.request()` → 최신 프레임 캡처 → Edge Function `describe-scene`(Gemini) 묘사.
+5. 결과를 화면 아래쪽에 큰 글씨로 표시하고 TTS로 낭독(상태 "말하는 중") → 끝나면 "대기 중".
+   - 처리 중 다시 묘사 요청: "지금 살펴보는 중이에요" 안내 후 무시.
+   - 실패: "주변을 살펴보지 못했어요. 다시 시도해 주세요." 안내.
+   - "다시 들려줘"(REPEAT): 마지막 묘사를 다시 낭독.
+   - 음성 인식을 못 쓰는 기기: 탭하면 듣지 않고 바로 묘사를 요청한다.
+
 ### 원칙
 
 - 사진은 기본적으로 저장하지 않는다. 캡처한 이미지는 묘사 요청에만 쓰고 버린다.
@@ -49,7 +61,10 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 - `data/SupabaseProvider` — lazily-created singleton `SupabaseClient` with `Auth` and `Postgrest` installed. Auth persists the session on-device, so restarts reuse it.
 - `data/UserSettingsRepository` — `ensureSignedIn()` waits for session restore (`awaitInitialization`) and signs in anonymously only if no session exists; `getOrCreate()` selects the user's `user_settings` row and inserts one with only `user_id` (letting DB defaults fill the rest) if missing. Row models are `@Serializable` data classes with `@SerialName` snake_case mapping.
-- `MainActivity` runs that startup flow in `lifecycleScope` on first creation and logs `sound_mode`; UI is still the template `Greeting` screen.
+- `MainActivity` runs that startup flow in `lifecycleScope` on first creation and logs `sound_mode`, creates `SeenarioController`, shows `SeenarioScreen`, and forwards key events. Nothing else should live there.
+- `SeenarioScreen.kt` — integration layer. `SeenarioController` wires `voice/` to `camera/` (describe/repeat handling, busy/error/watchdog, combined camera+mic permission request with a spoken notice). `SeenarioScreen` composes the full-screen camera preview, the single tap layer (push-to-talk), the top status panel, and the bottom result text (liveRegion off when TTS already read it).
+- `voice/` — `VoiceController` (push-to-talk, media session, TTS via `speak()`), `SpeechListener`, `TtsSpeaker`, `CommandParser`. Commands reach other modules through `VoiceCommandListener`.
+- `camera/` — `CameraStreamScreen` (preview + latest-frame capture on `DescribeTrigger` requests, no tap/text of its own), `FrameStreamAnalyzer`, `SceneDescriber` (calls Edge Function `describe-scene`).
 
 ## Database
 
@@ -57,6 +72,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 ## Git 협업 규칙 (Claude는 반드시 지킬 것)
 
+- **언어**: 사용자에게 하는 답변과 PR 제목/본문은 한국어로 쓴다.
 - **master**: 최종 배포/경진대회 제출용. 절대 직접 커밋, 푸시, 병합하지 않는다.
 - **dev**: 통합 테스트용. 직접 커밋하거나 병합하지 않고, 반드시 PR로만 합친다.
 - **작업 시작 전**: `git checkout dev` → `git pull origin dev` → 새 브랜치 생성.
