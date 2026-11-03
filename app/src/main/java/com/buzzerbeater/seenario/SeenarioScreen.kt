@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -134,7 +135,7 @@ private object Session {
  * 흐름: 화면 탭 → 듣기 → 휴대폰 명령(다시, 설정, 처음부터, 소리 모드)이면 바로 처리,
  * 아니면 에이전트에 대화(speech)로 보낸다. "묘사해줘"(또는 화면 1초 길게 누르기)는 describe로 보낸다.
  * → 생각하는 중 → 응답의 speech는 TTS로, display는 아래쪽에 표시 → 대기 중.
- * describe가 실패하면 기존 describe-scene 묘사([DescribeTrigger.request])로 대신한다.
+ * describe가 에러로 실패하면 남은 시간 안에서 기존 describe-scene 묘사([DescribeTrigger.request])로 대신한다(20초 초과면 바로 실패 안내).
  *
  * 카메라·마이크 권한도 여기서 한 번에 요청한다. Activity의 onCreate에서 만든다.
  */
@@ -338,27 +339,34 @@ class SeenarioController(
             soundMode = Session.soundMode,
         )
         Log.d(AGENT_TAG, "요청 type=$type input=\"$input\" history=${request.history.size} sound_mode=${request.soundMode.wire}")
+        // 에이전트와 대신 묘사를 합쳐 전체 대기 시간이 AGENT_TIMEOUT_MS를 넘지 않게 한다.
+        val startMs = SystemClock.elapsedRealtime()
         activity.lifecycleScope.launch {
             val response = try {
                 withTimeout(AGENT_TIMEOUT_MS) { agent.send(request) }
             } catch (e: TimeoutCancellationException) {
+                // 시간을 다 썼으므로 대신 묘사 없이 바로 실패로 끝낸다.
                 Log.w(AGENT_TAG, "에이전트 응답 시간 초과", e)
-                null
+                failAgent()
+                return@launch
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(AGENT_TAG, "에이전트 요청 실패", e)
                 null
             }
+            val remainingMs = AGENT_TIMEOUT_MS - (SystemClock.elapsedRealtime() - startMs)
             when {
                 response != null -> onAgentResponse(input, response)
-                type == InputType.DESCRIBE -> startFallbackDescribe(input)
-                else -> {
-                    thinking = false
-                    show(MSG_ERROR)
-                }
+                type == InputType.DESCRIBE && remainingMs > 0 -> startFallbackDescribe(input, remainingMs)
+                else -> failAgent()
             }
         }
+    }
+
+    private fun failAgent() {
+        thinking = false
+        show(MSG_ERROR)
     }
 
     private fun onAgentResponse(input: String, response: AgentResponse) {
@@ -369,14 +377,17 @@ class SeenarioController(
         show(response.display, speech = response.speech)
     }
 
-    /** describe 요청이 실패하면 기존 describe-scene 묘사로 대신한다. 결과는 [onDescribed]/[onDescribeFailed]로 온다. */
-    private fun startFallbackDescribe(input: String) {
-        Log.d(AGENT_TAG, "describe 실패 → describe-scene으로 대신 묘사")
+    /**
+     * describe 요청이 (시간 초과가 아닌) 에러로 실패하면 기존 describe-scene 묘사로 대신한다.
+     * 남은 시간 [timeoutMs] 안에 결과가 [onDescribed]/[onDescribeFailed]로 오지 않으면 실패로 끝낸다.
+     */
+    private fun startFallbackDescribe(input: String, timeoutMs: Long) {
+        Log.d(AGENT_TAG, "describe 에러 → describe-scene으로 대신 묘사 (남은 시간 ${timeoutMs}ms)")
         fallbackInput = input
         trigger.request()
-        // 카메라 화면이 아직 요청을 받을 수 없는 상태였다면 결과가 오지 않으므로, 오래 걸리면 실패로 끝낸다.
+        // 카메라 화면이 아직 요청을 받을 수 없는 상태였다면 결과가 오지 않으므로, 남은 시간이 지나면 실패로 끝낸다.
         fallbackWatchdog = activity.lifecycleScope.launch {
-            delay(AGENT_TIMEOUT_MS)
+            delay(timeoutMs)
             Log.w(TAG, "Describe timed out")
             onDescribeFailed()
         }
@@ -489,7 +500,7 @@ class SeenarioController(
     }
 
     private companion object {
-        /** 에이전트 응답(그리고 대신하는 describe-scene 묘사)을 기다리는 최대 시간. */
+        /** 에이전트 응답과 대신하는 describe-scene 묘사를 합쳐 기다리는 최대 시간. */
         const val AGENT_TIMEOUT_MS = 20_000L
         const val SPEECH_WAIT_MS = 15_000L
 
