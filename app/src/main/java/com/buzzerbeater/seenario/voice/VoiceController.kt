@@ -18,6 +18,7 @@ import androidx.core.content.IntentCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
+import com.buzzerbeater.seenario.agent.SoundMode
 
 enum class VoiceStatus(val label: String) {
     IDLE("대기 중"),
@@ -172,7 +173,7 @@ class VoiceController(
         Log.d(TAG, "heard=\"$heard\" command=$command candidates=$candidates")
         uiState = uiState.copy(lastHeard = heard)
         updateStatus(VoiceStatus.IDLE)
-        handleCommand(command)
+        handleCommand(command, heard)
     }
 
     private fun onNoSpeech() {
@@ -189,14 +190,19 @@ class VoiceController(
         }
     }
 
-    private fun handleCommand(command: VoiceCommand) {
+    /** 휴대폰 명령은 바로 처리하고, 그 밖의 말([VoiceCommand.UNKNOWN])은 에이전트에 대화로 넘긴다. */
+    private fun handleCommand(command: VoiceCommand, heard: String? = null) {
         when (command) {
-            VoiceCommand.DESCRIBE -> listener.onDescribeRequested()
-            VoiceCommand.SOUND_ON -> tts.speak("배경 소리 켜기 명령을 받았어요")
-            VoiceCommand.SOUND_OFF -> tts.speak("배경 소리 끄기 명령을 받았어요")
+            VoiceCommand.DESCRIBE -> listener.onDescribeRequested(heard)
+            VoiceCommand.SOUND_AMBIENT -> listener.onSoundModeRequested(SoundMode.AMBIENT)
+            VoiceCommand.SOUND_MUSIC -> listener.onSoundModeRequested(SoundMode.MUSIC)
+            VoiceCommand.SOUND_OFF -> listener.onSoundModeRequested(SoundMode.OFF)
+            VoiceCommand.SOUND_ON -> listener.onSoundOnRequested()
+            VoiceCommand.OPEN_SETTINGS -> listener.onOpenSettingsRequested()
+            VoiceCommand.RESET -> listener.onResetRequested()
             VoiceCommand.SAVE -> tts.speak("저장 명령을 받았어요")
             VoiceCommand.REPEAT -> listener.onRepeatRequested()
-            VoiceCommand.UNKNOWN -> Unit
+            VoiceCommand.UNKNOWN -> if (!heard.isNullOrBlank()) listener.onSpeechInput(heard)
         }
     }
 

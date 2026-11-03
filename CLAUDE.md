@@ -86,9 +86,12 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
   "input": "string",
   "input_type": "speech | describe",
   "image": "base64 JPEG",
-  "history": [{ "role": "user | agent", "text": "string" }]
+  "history": [{ "role": "user | agent", "text": "string" }],
+  "sound_mode": "off | ambient | music"
 }
 ```
+
+- 소리 모드는 사용자가 말로 고르며 기본값은 `off`다. 에이전트는 고른 모드 안에서만 음원을 고른다.
 
 응답:
 

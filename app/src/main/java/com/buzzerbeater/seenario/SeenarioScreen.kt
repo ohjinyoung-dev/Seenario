@@ -64,20 +64,35 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import com.buzzerbeater.seenario.agent.AgentAction
+import com.buzzerbeater.seenario.agent.AgentClient
+import com.buzzerbeater.seenario.agent.AgentRequest
+import com.buzzerbeater.seenario.agent.AgentResponse
+import com.buzzerbeater.seenario.agent.ConversationHistory
+import com.buzzerbeater.seenario.agent.InputType
+import com.buzzerbeater.seenario.agent.SoundMode
 import com.buzzerbeater.seenario.camera.CameraStreamScreen
 import com.buzzerbeater.seenario.camera.DescribeTrigger
 import com.buzzerbeater.seenario.camera.SceneDescriber
 import com.buzzerbeater.seenario.data.SupabaseProvider
+import com.buzzerbeater.seenario.data.UserSettings
+import com.buzzerbeater.seenario.sound.SoundModeStore
 import com.buzzerbeater.seenario.voice.VoiceCommandListener
 import com.buzzerbeater.seenario.voice.VoiceController
 import com.buzzerbeater.seenario.voice.VoiceStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "SEENARIO"
+
+/** 에이전트 응답의 actions 등 에이전트 관련 로그. */
+private const val AGENT_TAG = "SEENARIO_AGENT"
 
 /** 이만큼 누르고 있으면 듣지 않고 바로 묘사한다. */
 private const val LONG_PRESS_DESCRIBE_MS = 1_000L
@@ -88,19 +103,38 @@ private const val LONG_PRESS_VIBRATION_MS = 150L
 /** 진동 세기 최댓값(1~255). */
 private const val MAX_AMPLITUDE = 255
 
-/** 화면 위쪽에 보여 주는 상태. 음성 상태([VoiceStatus])에 "살펴보는 중"을 더했다. */
+/** 화면 위쪽에 보여 주는 상태. 음성 상태([VoiceStatus])에 "생각하는 중"을 더했다. */
 enum class SeenarioStatus(val label: String) {
     IDLE("대기 중"),
     LISTENING("듣는 중"),
-    LOOKING("살펴보는 중"),
+    THINKING("생각하는 중"),
     SPEAKING("말하는 중"),
 }
 
 /**
- * 음성 모듈(voice/)과 카메라 모듈(camera/)을 잇는다.
+ * 화면 회전 등으로 Activity(와 컨트롤러)가 다시 만들어져도 유지할 값. 프로세스가 끝나면(앱을 다시 켜면) 사라진다.
+ */
+private object Session {
+    /** 에이전트에 같이 보내는 최근 대화 기록. "처음부터"라고 하면 지운다. */
+    val history = ConversationHistory()
+
+    /** 지금 소리 모드. 시작할 때 user_settings에서 읽어 온다. */
+    var soundMode by mutableStateOf(SoundMode.OFF)
+
+    /** "소리 켜"에 쓸, 마지막으로 켠 모드. */
+    var lastOnMode: SoundMode? = null
+
+    /** 사용자가 이미 말로 모드를 바꿨으면 늦게 도착한 시작 설정으로 덮어쓰지 않는다. */
+    var soundModeChangedByUser = false
+}
+
+/**
+ * 음성 모듈(voice/), 에이전트(agent/), 카메라 모듈(camera/)을 잇는다.
  *
- * 흐름: 화면 탭 → 듣기 → "묘사해줘"(또는 화면 1초 길게 누르기) → [DescribeTrigger.request] → 카메라 캡처
- * → Gemini 묘사 → 아래쪽에 텍스트 표시 + TTS 낭독 → 대기 중.
+ * 흐름: 화면 탭 → 듣기 → 휴대폰 명령(다시, 설정, 처음부터, 소리 모드)이면 바로 처리,
+ * 아니면 에이전트에 대화(speech)로 보낸다. "묘사해줘"(또는 화면 1초 길게 누르기)는 describe로 보낸다.
+ * → 생각하는 중 → 응답의 speech는 TTS로, display는 아래쪽에 표시 → 대기 중.
+ * describe가 실패하면 기존 describe-scene 묘사([DescribeTrigger.request])로 대신한다.
  *
  * 카메라·마이크 권한도 여기서 한 번에 요청한다. Activity의 onCreate에서 만든다.
  */
@@ -111,10 +145,15 @@ class SeenarioController(
     val voice = VoiceController(activity, this, requestPermissions = ::requestPermissions)
     val trigger = DescribeTrigger()
     val describer = SceneDescriber(SupabaseProvider.client)
+    private val agent = AgentClient.create(SupabaseProvider.client)
+    private val soundModeStore = SoundModeStore(SupabaseProvider.client)
 
-    /** 묘사를 요청해 결과를 기다리는 중. */
-    var describing by mutableStateOf(false)
+    /** 에이전트(또는 대신하는 describe-scene) 응답을 기다리는 중. */
+    var thinking by mutableStateOf(false)
         private set
+
+    /** 지금 소리 모드. 화면 위쪽에 보여 준다. */
+    val soundMode: SoundMode get() = Session.soundMode
 
     /** 아래쪽에 보여 줄 텍스트. null이면 사용 안내를 보여 준다. */
     var resultText by mutableStateOf<String?>(null)
@@ -131,13 +170,17 @@ class SeenarioController(
     val status: SeenarioStatus
         get() = when {
             voice.uiState.status == VoiceStatus.LISTENING -> SeenarioStatus.LISTENING
-            describing -> SeenarioStatus.LOOKING
+            thinking -> SeenarioStatus.THINKING
             voice.uiState.status == VoiceStatus.SPEAKING -> SeenarioStatus.SPEAKING
             else -> SeenarioStatus.IDLE
         }
 
-    private var lastDescription: String? = null
-    private var describeWatchdog: Job? = null
+    /** "다시"라고 하면 읽어 줄 마지막 답변. */
+    private var lastAnswer: String? = null
+
+    /** describe-scene으로 대신 묘사하는 중이면 그 요청의 입력(대화 기록용). */
+    private var fallbackInput: String? = null
+    private var fallbackWatchdog: Job? = null
     private var requestingPermissions = false
     private var permanentlyDenied = false
 
@@ -207,53 +250,157 @@ class SeenarioController(
         }
     }
 
-    override fun onDescribeRequested() {
-        if (describing) {
+    override fun onDescribeRequested(heard: String?) {
+        askAgent(InputType.DESCRIBE, heard ?: DESCRIBE_INPUT)
+    }
+
+    override fun onSpeechInput(text: String) {
+        askAgent(InputType.SPEECH, text)
+    }
+
+    override fun onRepeatRequested() {
+        val last = lastAnswer
+        when {
+            last == null -> voice.speak(MSG_NOTHING_TO_REPEAT)
+            thinking -> voice.speak(last)
+            else -> show(last)
+        }
+    }
+
+    override fun onResetRequested() {
+        Session.history.clear()
+        Log.d(AGENT_TAG, "대화 기록 초기화")
+        voice.speak(MSG_RESET)
+    }
+
+    override fun onOpenSettingsRequested() {
+        openAppSettings()
+    }
+
+    override fun onSoundModeRequested(mode: SoundMode) = changeSoundMode(mode)
+
+    override fun onSoundOnRequested() = changeSoundMode(Session.lastOnMode ?: SoundMode.AMBIENT)
+
+    /** 시작할 때 MainActivity가 읽은 user_settings를 넘겨준다. */
+    fun onSettingsLoaded(settings: UserSettings) {
+        if (Session.soundModeChangedByUser) return
+        val mode = SoundMode.fromWire(settings.soundMode)
+        Session.soundMode = mode
+        if (mode != SoundMode.OFF) Session.lastOnMode = mode
+    }
+
+    /** 소리 모드를 바꾸고 TTS로 알린 뒤 user_settings.sound_mode에 저장한다. */
+    private fun changeSoundMode(mode: SoundMode) {
+        Session.soundModeChangedByUser = true
+        Session.soundMode = mode
+        if (mode == SoundMode.OFF) {
+            // 소리 재생기가 아직 없어서 정지는 로그로만 남긴다.
+            Log.d(AGENT_TAG, "action ${AgentAction.STOP_SOUND} (재생기 없음)")
+        } else {
+            Session.lastOnMode = mode
+        }
+        voice.speak(soundModeNotice(mode))
+        activity.lifecycleScope.launch {
+            try {
+                soundModeStore.save(mode)
+                Log.d(TAG, "sound_mode 저장: ${mode.wire}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "sound_mode 저장 실패", e)
+            }
+        }
+    }
+
+    /** 사용자 입력을 에이전트로 보낸다. 처리 중이면 안내만 하고 무시한다. */
+    private fun askAgent(type: InputType, input: String) {
+        if (thinking) {
             voice.speak(MSG_BUSY)
             return
         }
-        refreshPermissions()
-        if (Manifest.permission.CAMERA in missingPermissions) {
-            requestPermissions()
-            return
+        if (type == InputType.DESCRIBE) {
+            refreshPermissions()
+            if (Manifest.permission.CAMERA in missingPermissions) {
+                requestPermissions()
+                return
+            }
+            show(TEXT_LOOKING, speech = MSG_LOOKING)
+        } else {
+            show(TEXT_THINKING, speech = MSG_THINKING)
         }
-        describing = true
-        show(TEXT_LOOKING, speech = MSG_LOOKING)
+        thinking = true
+        val request = AgentRequest(
+            input = input,
+            inputType = type,
+            // camera/에서 최신 프레임을 받을 방법이 생기면 base64 JPEG를 넣는다.
+            image = null,
+            history = Session.history.snapshot(),
+            soundMode = Session.soundMode,
+        )
+        Log.d(AGENT_TAG, "요청 type=$type input=\"$input\" history=${request.history.size} sound_mode=${request.soundMode.wire}")
+        activity.lifecycleScope.launch {
+            val response = try {
+                withTimeout(AGENT_TIMEOUT_MS) { agent.send(request) }
+            } catch (e: TimeoutCancellationException) {
+                Log.w(AGENT_TAG, "에이전트 응답 시간 초과", e)
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(AGENT_TAG, "에이전트 요청 실패", e)
+                null
+            }
+            when {
+                response != null -> onAgentResponse(input, response)
+                type == InputType.DESCRIBE -> startFallbackDescribe(input)
+                else -> {
+                    thinking = false
+                    show(MSG_ERROR)
+                }
+            }
+        }
+    }
+
+    private fun onAgentResponse(input: String, response: AgentResponse) {
+        thinking = false
+        response.actions.forEach { Log.d(AGENT_TAG, "action $it (재생기 없음, 로그만)") }
+        Session.history.addExchange(input, response.speech)
+        lastAnswer = response.speech
+        show(response.display, speech = response.speech)
+    }
+
+    /** describe 요청이 실패하면 기존 describe-scene 묘사로 대신한다. 결과는 [onDescribed]/[onDescribeFailed]로 온다. */
+    private fun startFallbackDescribe(input: String) {
+        Log.d(AGENT_TAG, "describe 실패 → describe-scene으로 대신 묘사")
+        fallbackInput = input
         trigger.request()
         // 카메라 화면이 아직 요청을 받을 수 없는 상태였다면 결과가 오지 않으므로, 오래 걸리면 실패로 끝낸다.
-        describeWatchdog = activity.lifecycleScope.launch {
-            delay(DESCRIBE_TIMEOUT_MS)
+        fallbackWatchdog = activity.lifecycleScope.launch {
+            delay(AGENT_TIMEOUT_MS)
             Log.w(TAG, "Describe timed out")
             onDescribeFailed()
         }
     }
 
-    override fun onRepeatRequested() {
-        val last = lastDescription
-        when {
-            last == null -> voice.speak(MSG_NOTHING_TO_REPEAT)
-            describing -> voice.speak(last)
-            else -> show(last)
-        }
-    }
-
     fun onDescribed(description: String) {
-        if (!describing) return
-        finishDescribing()
-        lastDescription = description
+        val input = fallbackInput ?: return
+        finishFallback()
+        Session.history.addExchange(input, description)
+        lastAnswer = description
         show(description)
     }
 
     fun onDescribeFailed() {
-        if (!describing) return
-        finishDescribing()
+        if (fallbackInput == null) return
+        finishFallback()
         show(MSG_ERROR)
     }
 
-    private fun finishDescribing() {
-        describing = false
-        describeWatchdog?.cancel()
-        describeWatchdog = null
+    private fun finishFallback() {
+        thinking = false
+        fallbackInput = null
+        fallbackWatchdog?.cancel()
+        fallbackWatchdog = null
     }
 
     private fun show(text: String, speech: String = text) {
@@ -342,11 +489,18 @@ class SeenarioController(
     }
 
     private companion object {
-        const val DESCRIBE_TIMEOUT_MS = 60_000L
+        /** 에이전트 응답(그리고 대신하는 describe-scene 묘사)을 기다리는 최대 시간. */
+        const val AGENT_TIMEOUT_MS = 20_000L
         const val SPEECH_WAIT_MS = 15_000L
 
         const val MSG_LOOKING = "잠시만요, 주변을 살펴볼게요."
         const val TEXT_LOOKING = "주변을 살펴보고 있어요…"
+        const val MSG_THINKING = "잠시만요, 생각해 볼게요."
+        const val TEXT_THINKING = "생각하고 있어요…"
+        const val MSG_RESET = "대화를 처음부터 다시 시작할게요."
+
+        /** 화면 길게 누르기처럼 들은 말이 없는 describe 요청의 input. */
+        const val DESCRIBE_INPUT = "묘사해줘"
         const val MSG_BUSY = "지금 살펴보는 중이에요"
         const val MSG_ERROR = "주변을 살펴보지 못했어요. 다시 시도해 주세요."
         const val MSG_NOTHING_TO_REPEAT = "아직 들려드린 묘사가 없어요. '묘사해줘'라고 말해 주세요."
@@ -354,6 +508,12 @@ class SeenarioController(
         const val MSG_DENIED_SETTINGS =
             "권한이 꺼져 있어요. 화면을 누르면 설정 화면을 열게요. 권한에서 카메라와 마이크를 허용해 주세요."
         const val MSG_OPEN_SETTINGS = "설정 화면을 열게요. 권한에서 카메라와 마이크를 허용해 주세요."
+
+        fun soundModeNotice(mode: SoundMode): String = when (mode) {
+            SoundMode.OFF -> "소리를 껐어요."
+            SoundMode.AMBIENT -> "환경음 모드로 바꿨어요."
+            SoundMode.MUSIC -> "배경음 모드로 바꿨어요."
+        }
 
         fun permissionNotice(missing: List<String>): String {
             val names = when {
@@ -452,6 +612,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
 
         StatusPanel(
             status = controller.status,
+            soundMode = controller.soundMode,
             lastHeard = voiceState.lastHeard,
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -481,7 +642,12 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun StatusPanel(status: SeenarioStatus, lastHeard: String?, modifier: Modifier = Modifier) {
+private fun StatusPanel(
+    status: SeenarioStatus,
+    soundMode: SoundMode,
+    lastHeard: String?,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
@@ -494,6 +660,14 @@ private fun StatusPanel(status: SeenarioStatus, lastHeard: String?, modifier: Mo
             fontWeight = FontWeight.Bold,
             color = Color.White,
             modifier = Modifier.semantics { contentDescription = "현재 상태: ${status.label}" },
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "소리: ${soundMode.label}",
+            fontSize = 20.sp,
+            lineHeight = 28.sp,
+            color = Color.White,
+            modifier = Modifier.semantics { contentDescription = "현재 소리 모드: ${soundMode.label}" },
         )
         if (lastHeard != null) {
             Spacer(Modifier.height(6.dp))
