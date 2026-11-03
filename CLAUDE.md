@@ -71,6 +71,56 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 `supabase/schema.sql` is the reference schema for `user_settings` and `memories` (both keyed to `auth.users`, RLS restricting rows to `auth.uid()`, `updated_at` trigger on `user_settings`), plus the shared read-only `sounds` catalog (ambient/music tracks; files live in the private Storage bucket `sounds`, rows point to them via `file_path`). The live tables were created manually in the Supabase dashboard, so this file is not applied automatically — when changing the schema, give the user incremental SQL to run rather than re-running the whole file. Anonymous sign-ins must be enabled in the Supabase project.
 
+## 에이전트 구조 (ReAct)
+
+- 기본 모드(묘사)와 대화 모드를 하나로 합친다. 앱은 사용자 입력과 최신 카메라 사진을 Edge Function `seenario-agent`로 보낸다. 에이전트는 생각 → 도구 사용 → 판단을 최대 3번 반복한 뒤 답한다.
+- 사진 촬영과 소리 재생은 앱이 맡는다. 서버는 응답의 `actions`로 무엇을 할지 지시만 한다.
+- 에이전트가 완성되기 전까지는 기존 `describe-scene`을 쓴다. 현재 `describe-scene`은 `{ description, model }`을 돌려준다. `user_settings.sound_mode`가 `ambient`/`music`이면 `soundMode`, `tags`(`SOUND_TAGS` 값), `sound`도 함께 돌려준다. `sound`는 `{ id, title, mode, url(1시간 signed URL), loopable, tags }` 형태이고, 고르지 못하면 `null`이다. 앱(`SceneDescriber`)은 아직 이 값들을 로그로만 남긴다.
+
+### 앱 ↔ 에이전트 약속
+
+요청:
+
+```json
+{
+  "input": "string",
+  "input_type": "speech | describe",
+  "image": "base64 JPEG",
+  "history": [{ "role": "user | agent", "text": "string" }]
+}
+```
+
+응답:
+
+```json
+{
+  "speech": "string",
+  "display": "string",
+  "actions": [{
+    "type": "play_sound | stop_sound",
+    "sound_id": "string (선택)",
+    "title": "string (선택)",
+    "url": "signed URL (선택)",
+    "volume": "number (선택)",
+    "loopable": "boolean (선택)"
+  }]
+}
+```
+
+### 소리 고르기 도구 (`tools/sound.ts`, 앱 담당)
+
+- 지금 `describe-scene` 안에 있는 음원 선택 로직(`pickSound`)을 에이전트 단계에서 `supabase/functions/seenario-agent/tools/sound.ts`로 옮긴다. 이 로직은 `SOUND_TAGS` 기반으로 같은 mode의 음원 중 태그가 가장 많이 겹치는 것을 고르고, 동점이면 무작위로 고르며, 하나도 겹치지 않으면 고르지 않는다.
+- 태그 목록 `SOUND_TAGS`는 현재 `supabase/functions/describe-scene/sound_tags.ts`에 있다. `sounds.tags`와 Gemini 태그는 이 목록의 영문 소문자 단어만 쓴다.
+- 입력: `{ "mode": "ambient" | "music", "tags": SOUND_TAGS 안의 값 배열, "existing_sounds": 이미 들리는 소리 종류 배열 }`
+- 출력: `{ "sound_id", "title", "url"(1시간 signed URL), "loopable" }` 또는 `null`
+- `existing_sounds`에 해당하는 종류의 음원은 제외한다.
+
+## 파일 담당
+
+- **앱 담당**: `voice/`, `agent/`, `sound/`, `SeenarioScreen.kt`, `supabase/functions/seenario-agent/tools/sound.ts`, Storage 음원
+- **서버/AI 담당**: `camera/`, `supabase/functions/seenario-agent/`의 나머지, `describe-scene`, `schema.sql`과 DB 변경
+- **공용(수정 전 서로 알리기)**: `MainActivity.kt`, `AndroidManifest.xml`, `libs.versions.toml`, `build.gradle.kts`, `CLAUDE.md`
+
 ## Git 협업 규칙 (Claude는 반드시 지킬 것)
 
 - **언어**: 사용자에게 하는 답변과 PR 제목/본문은 한국어로 쓴다.
@@ -81,7 +131,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 - **작업이 끝나면**: 내 브랜치를 푸시하고 dev로 가는 PR을 만든다. 병합은 팀원이 확인한 뒤 사람이 직접 한다.
 - 현재 브랜치가 master나 dev인 상태에서 코드 수정을 요청받으면, 먼저 알맞은 브랜치를 만들자고 제안한다.
 - **커밋 메시지 태그**: `[Feat]` 새 기능, `[Fix]` 버그 수정, `[UI]` 레이아웃/디자인, `[Refactor]` 기능 변화 없는 구조 개선, `[Chore]` 라이브러리/빌드 설정/.gitignore 등. 메시지는 한국어로 쓴다.
-- **코드 겹침 방지**: 음성 기능은 `voice/` 폴더, 카메라/AI 기능은 `camera/` 폴더에 둔다. `MainActivity.kt`, `AndroidManifest.xml`, `libs.versions.toml`, `build.gradle.kts`는 공용 파일이므로 꼭 필요한 최소한만 수정한다.
+- **코드 겹침 방지**: 위 "파일 담당"에 따라 자기 담당 파일만 수정한다. 공용 파일(`MainActivity.kt`, `AndroidManifest.xml`, `libs.versions.toml`, `build.gradle.kts`, `CLAUDE.md`)은 수정 전에 서로 알리고, 꼭 필요한 최소한만 수정한다.
 - **보안**
   - Supabase URL과 publishable key는 `local.properties`에만 둔다.
   - Gemini/Claude API 키 같은 비밀 키는 Supabase Edge Function secrets에만 둔다. 앱 코드, `build.gradle.kts`, `local.properties`에는 절대 넣지 않는다.
