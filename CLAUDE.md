@@ -123,6 +123,19 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 - **서버/AI 담당**: `camera/`, `supabase/functions/seenario-agent/`의 나머지, `describe-scene`, `schema.sql`과 DB 변경
 - **공용(수정 전 서로 알리기)**: `MainActivity.kt`, `AndroidManifest.xml`, `libs.versions.toml`, `build.gradle.kts`, `CLAUDE.md`
 
+## 작업 범위와 확인 규칙 (Claude는 반드시 지킬 것)
+
+- 요청받은 범위만 작업한다. 요청에 없는 기능, 명령, 모드, 화면은 삭제하거나 동작을 바꾸지 않는다.
+- 요청을 두 가지 이상으로 해석할 수 있으면, 작업을 시작하기 전에 어떻게 이해했는지 설명하고 사용자에게 확인받는다.
+- 아래 작업은 요청에 명확히 적혀 있지 않으면 하기 전에 반드시 물어본다.
+  - 기존 기능, 명령, 모드, 파일 삭제
+  - DB 테이블, 컬럼, 제약 조건 변경
+  - 앱-에이전트 약속(요청/응답 형식) 변경
+  - 다른 사람 담당 폴더나 공용 파일 수정
+- 더 좋은 방법이 떠오르면 바로 적용하지 말고 "제안"으로 먼저 알린다.
+- 작업 결과를 보고할 때 "요청과 다르게 한 부분"과 "요청에 없었지만 추가한 부분"을 따로 구분해서 적는다.
+- 변경 범위가 큰 작업은 plan mode로 계획을 먼저 보여주고 승인받는다.
+
 ## Git 협업 규칙 (Claude는 반드시 지킬 것)
 
 - **언어**: 사용자에게 하는 답변과 PR 제목/본문은 한국어로 쓴다.
