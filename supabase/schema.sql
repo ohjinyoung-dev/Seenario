@@ -108,3 +108,27 @@ on conflict (id) do nothing;
 drop policy if exists "sounds_bucket_read_authenticated" on storage.objects;
 create policy "sounds_bucket_read_authenticated" on storage.objects
     for select to authenticated using (bucket_id = 'sounds');
+
+-- ---------------------------------------------------------------------------
+-- sounds.contains (음원에 실제로 들어 있는 소리 종류)
+-- - tags는 "어울리는 상황"(SOUND_TAGS), contains는 "실제로 들리는 소리"다.
+-- - 소리 고르기 도구는 existing_sounds(지금 주변에서 이미 들리는 소리)와
+--   contains가 겹치는 음원을 제외한다. 예: 실제로 비가 오면 rain이 든 음원은 고르지 않는다.
+-- - 허용 값: birds, wind, rain, water, traffic, people, music
+-- ---------------------------------------------------------------------------
+alter table public.sounds
+    add column if not exists contains text[] not null default '{}';
+
+alter table public.sounds drop constraint if exists sounds_contains_check;
+alter table public.sounds add constraint sounds_contains_check
+    check (contains <@ array['birds', 'wind', 'rain', 'water', 'traffic', 'people', 'music']::text[]);
+
+create index if not exists sounds_contains_idx on public.sounds using gin (contains);
+
+-- 음원별 contains 값 (2026-11-03 대시보드에서 적용 완료, 기록용)
+-- 새 음원을 올리면 실제로 들리는 소리를 직접 듣고 contains를 채운다.
+update public.sounds set contains = array['rain'] where file_path = 'ambient/rain-window.mp3';                         -- 창밖 빗소리
+update public.sounds set contains = array['water'] where file_path = 'ambient/ocean-waves.mp3';                       -- 파도 소리
+update public.sounds set contains = array['birds', 'wind'] where file_path = 'ambient/forest-evening.mp3';            -- 저녁 숲: 새소리, 바람
+update public.sounds set contains = array['rain', 'traffic', 'people'] where file_path = 'ambient/city-street-rain.mp3'; -- 비 오는 거리: 비, 차, 사람
+update public.sounds set contains = array['music'] where mode = 'music';                                              -- 배경음악은 모두 music
