@@ -69,3 +69,42 @@ create policy "memories_update_own" on public.memories
     for update to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "memories_delete_own" on public.memories
     for delete to authenticated using (auth.uid() = user_id);
+
+-- ---------------------------------------------------------------------------
+-- sounds (배경음악 / 환경음 목록)
+-- 모든 사용자가 같이 쓰는 공용 목록. 앱에서는 읽기만 하고,
+-- 추가/수정/삭제는 대시보드(또는 service role)에서만 한다.
+-- 음원 파일은 Storage 버킷 'sounds'에 두고 file_path에 버킷 안 경로를 적는다.
+-- tags에는 supabase/functions/describe-scene/sound_tags.ts 목록의 영문 단어만 넣는다.
+-- ---------------------------------------------------------------------------
+create table if not exists public.sounds (
+    id           uuid primary key default gen_random_uuid(),
+    mode         text not null check (mode in ('ambient', 'music')),
+    title        text not null,
+    file_path    text not null unique,
+    duration_sec integer check (duration_sec > 0),
+    loopable     boolean not null default true,
+    tags         text[] not null default '{}',
+    source       text,
+    license      text,
+    is_active    boolean not null default true,
+    created_at   timestamptz not null default now()
+);
+
+create index if not exists sounds_mode_idx on public.sounds (mode) where is_active;
+create index if not exists sounds_tags_idx on public.sounds using gin (tags);
+
+alter table public.sounds enable row level security;
+
+drop policy if exists "sounds_select_authenticated" on public.sounds;
+create policy "sounds_select_authenticated" on public.sounds
+    for select to authenticated using (is_active);
+
+-- 음원 파일 버킷 (비공개, 로그인한 사용자만 읽기)
+insert into storage.buckets (id, name, public)
+values ('sounds', 'sounds', false)
+on conflict (id) do nothing;
+
+drop policy if exists "sounds_bucket_read_authenticated" on storage.objects;
+create policy "sounds_bucket_read_authenticated" on storage.objects
+    for select to authenticated using (bucket_id = 'sounds');
