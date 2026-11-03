@@ -17,12 +17,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. 앱 실행 → 빠진 권한이 있으면 TTS로 "곧 카메라와 마이크 권한을 묻는 창이 떠요. '앱 사용 중에만 허용'을 선택해 주세요." 안내 후 카메라·마이크 권한을 한 번에 요청한다.
 2. 권한이 있으면 카메라 미리보기가 화면 전체에 켜지고, 시작 안내를 TTS로 읽는다.
 3. 화면 탭 / 이어폰 버튼 → 한 번 듣기(눌러서 말하기). 상태: "듣는 중". 볼륨 키는 볼륨 조절용으로 남겨 둔다.
-   - 화면을 1초 이상 길게 누르면 듣지 않고 바로 묘사를 요청한다(시끄러운 곳용). TalkBack에서는 두 번 탭하고 누르고 있기.
-4. "묘사해줘" → TTS "잠시만요, 주변을 살펴볼게요." + 상태 "살펴보는 중" → `DescribeTrigger.request()` → 최신 프레임 캡처 → Edge Function `describe-scene`(Gemini) 묘사.
-5. 결과를 화면 아래쪽에 큰 글씨로 표시하고 TTS로 낭독(상태 "말하는 중") → 끝나면 "대기 중".
-   - 처리 중 다시 묘사 요청: "지금 살펴보는 중이에요" 안내 후 무시.
-   - 실패: "주변을 살펴보지 못했어요. 다시 시도해 주세요." 안내.
-   - "다시 들려줘"(REPEAT): 마지막 묘사를 다시 낭독.
+   - 화면을 1초 이상 길게 누르면 듣지 않고 바로 묘사(`input_type: "describe"`)를 요청한다(시끄러운 곳용). TalkBack에서는 두 번 탭하고 누르고 있기.
+4. 들은 말이 휴대폰 명령이면 앱이 바로 처리한다.
+   - "다시": 마지막 답변을 다시 낭독. "설정 열어줘": 시스템 앱 정보 화면. "처음부터": 대화 기록 초기화.
+   - "환경음 모드" / "배경음 모드" / "소리 꺼": `sound_mode`를 `ambient` / `music` / `off`로 바꾼다. "소리 켜": 마지막으로 켠 모드(없으면 환경음).
+   - 모드를 바꾸면 TTS로 "환경음 모드로 바꿨어요"처럼 알리고 `user_settings.sound_mode`에 저장한다. 앱을 켤 때 이 값을 읽어 오며, 화면 위쪽에 현재 소리 모드를 표시한다.
+5. 휴대폰 명령이 아니면 에이전트(`agent/`)로 보낸다. "묘사해줘"는 `describe`, 나머지 말은 `speech`. 최근 대화 6개(메시지 기준)와 현재 `sound_mode`를 같이 보낸다.
+   - TTS "잠시만요, 주변을 살펴볼게요."(describe) 또는 "잠시만요, 생각해 볼게요."(speech) + 상태 "생각하는 중".
+   - 지금은 `BuildConfig.USE_FAKE_AGENT`(기본 true)라서 2초 뒤 가짜 응답이 온다. 최신 카메라 사진은 camera/에 가져오는 함수가 생길 때까지 보내지 않는다.
+6. 응답의 `speech`는 TTS로 낭독(상태 "말하는 중"), `display`는 화면 아래쪽에 큰 글씨로 표시 → 끝나면 "대기 중". `actions`는 소리 재생기가 생길 때까지 Logcat `SEENARIO_AGENT`에만 남긴다.
+   - 처리 중 다시 요청: "지금 살펴보는 중이에요" 안내 후 무시.
+   - 실패: "주변을 살펴보지 못했어요. 다시 시도해 주세요." 안내. 전체 대기 시간은 20초를 넘지 않는다.
+   - describe가 에러로 바로 실패하면 남은 시간 안에서 기존 `describe-scene`(`DescribeTrigger.request()` → 최신 프레임 → Gemini)으로 대신 묘사한다. 20초 시간 초과면 대신 묘사 없이 바로 실패 안내.
    - 음성 인식을 못 쓰는 기기: 탭하면 듣지 않고 바로 묘사를 요청한다.
 
 ### 원칙
@@ -62,10 +68,12 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 - `data/SupabaseProvider` — lazily-created singleton `SupabaseClient` with `Auth` and `Postgrest` installed. Auth persists the session on-device, so restarts reuse it.
 - `data/UserSettingsRepository` — `ensureSignedIn()` waits for session restore (`awaitInitialization`) and signs in anonymously only if no session exists; `getOrCreate()` selects the user's `user_settings` row and inserts one with only `user_id` (letting DB defaults fill the rest) if missing. Row models are `@Serializable` data classes with `@SerialName` snake_case mapping.
-- `MainActivity` runs that startup flow in `lifecycleScope` on first creation and logs `sound_mode`, creates `SeenarioController`, shows `SeenarioScreen`, and forwards key events. Nothing else should live there.
-- `SeenarioScreen.kt` — integration layer. `SeenarioController` wires `voice/` to `camera/` (describe/repeat handling, busy/error/watchdog, combined camera+mic permission request with a spoken notice). `SeenarioScreen` composes the full-screen camera preview, the single tap layer (push-to-talk), the top status panel, and the bottom result text (liveRegion off when TTS already read it).
-- `voice/` — `VoiceController` (push-to-talk, media session, TTS via `speak()`), `SpeechListener`, `TtsSpeaker`, `CommandParser`. Commands reach other modules through `VoiceCommandListener`.
-- `camera/` — `CameraStreamScreen` (preview + latest-frame capture on `DescribeTrigger` requests, no tap/text of its own), `FrameStreamAnalyzer`, `SceneDescriber` (calls Edge Function `describe-scene`).
+- `MainActivity` runs that startup flow in `lifecycleScope` on first creation, logs `sound_mode` and passes the loaded settings to `SeenarioController.onSettingsLoaded()`, creates `SeenarioController`, shows `SeenarioScreen`, and forwards key events. Nothing else should live there.
+- `SeenarioScreen.kt` — integration layer. `SeenarioController` wires `voice/` to `agent/` and `camera/`: phone commands (repeat, settings, reset, sound mode), agent requests with a 20 s total budget, describe fallback to `describe-scene` via `DescribeTrigger` when the agent errors, busy/error handling, and the combined camera+mic permission request with a spoken notice. A process-level `Session` object keeps the conversation history and sound mode across Activity recreation. `SeenarioScreen` composes the full-screen camera preview, the single tap layer (push-to-talk), the top status panel (status + current sound mode), and the bottom result text (liveRegion off when TTS already read it).
+- `agent/` — `AgentModels` (request/response classes for the app ↔ agent contract, `InputType`, `SoundMode`, `AgentJson`), `AgentClient` (`create()` picks `FakeAgentClient` or `SupabaseAgentClient` by `BuildConfig.USE_FAKE_AGENT`, default true, overridable in `local.properties`), `FakeAgentClient` (sample responses after 2 s), `SupabaseAgentClient` (calls Edge Function `seenario-agent`), `ConversationHistory` (last 6 messages, in memory only).
+- `sound/` — `SoundModeStore` saves `user_settings.sound_mode`. No player yet; sound actions are only logged with tag `SEENARIO_AGENT`.
+- `voice/` — `VoiceController` (push-to-talk, media session, TTS via `speak()`), `SpeechListener`, `TtsSpeaker`, `CommandParser` (phone commands; anything else is `UNKNOWN` and goes to the agent as speech). Commands reach other modules through `VoiceCommandListener`.
+- `camera/` — `CameraStreamScreen` (preview + latest-frame capture on `DescribeTrigger` requests, no tap/text of its own), `FrameStreamAnalyzer`, `SceneDescriber` (calls Edge Function `describe-scene`; now used as the describe fallback). There is no public way yet to read the latest frame from outside, so agent requests omit `image` for now.
 
 ## Database
 
