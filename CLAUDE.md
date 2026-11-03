@@ -20,8 +20,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - 화면을 1초 이상 길게 누르면 듣지 않고 바로 묘사(`input_type: "describe"`)를 요청한다(시끄러운 곳용). TalkBack에서는 두 번 탭하고 누르고 있기.
 4. 들은 말이 휴대폰 명령이면 앱이 바로 처리한다.
    - "다시": 마지막 답변을 다시 낭독. "설정 열어줘": 시스템 앱 정보 화면. "처음부터": 대화 기록 초기화.
-   - "환경음 모드" / "배경음 모드" / "소리 꺼": `sound_mode`를 `ambient` / `music` / `off`로 바꾼다. "소리 켜": 마지막으로 켠 모드(없으면 환경음).
-   - 모드를 바꾸면 TTS로 "환경음 모드로 바꿨어요"처럼 알리고 `user_settings.sound_mode`에 저장한다. 앱을 켤 때 이 값을 읽어 오며, 화면 위쪽에 현재 소리 모드를 표시한다.
+   - "환경음 모드"·"환경음 켜" / "배경음 모드"·"배경음 켜": `sound_mode`를 `ambient` / `music`으로 바꾼다.
+   - "소리 꺼", "기본 모드(로 가줘/돌아가)", "기본으로", "소리 없이", "조용히": 기본 모드(`off`)로 바꾼다. 화면과 안내에서는 `off`를 "기본 모드"라고 부른다.
+   - "소리 켜": 지난 모드가 `ambient`/`music`이면 그 모드로, `off`이거나 없으면 환경음으로 켠다.
+   - 모드를 바꾸면 TTS로 "환경음 모드로 바꿨어요"처럼 알리고 `user_settings.sound_mode`(DB)에 저장한다. 바꾼 모드(`off` 포함)는 "지난 모드"로 휴대폰 DataStore에도 저장한다. 화면 위쪽에 현재 소리 모드를 표시한다.
+   - 앱을 켜면 항상 기본 모드로 시작하고 DB `sound_mode`도 `off`로 저장한다(지난 모드에는 기록하지 않음). 지난 모드가 `ambient`/`music`이면 시작 안내 끝에 "지난번에는 환경음 모드를 쓰셨어요. '환경음 켜'라고 말하면 다시 켜져요."(배경음이면 배경음)를 붙인다. 음성 인식을 못 쓰는 기기에는 붙이지 않는다.
 5. 휴대폰 명령이 아니면 에이전트(`agent/`)로 보낸다. "묘사해줘"는 `describe`, 나머지 말은 `speech`. 최근 대화 6개(메시지 기준)와 현재 `sound_mode`를 같이 보낸다.
    - TTS "잠시만요, 주변을 살펴볼게요."(describe) 또는 "잠시만요, 생각해 볼게요."(speech) + 상태 "생각하는 중".
    - 지금은 `BuildConfig.USE_FAKE_AGENT`(기본 true)라서 2초 뒤 가짜 응답이 온다. 최신 카메라 사진은 camera/에 가져오는 함수가 생길 때까지 보내지 않는다.
@@ -71,7 +74,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 - `MainActivity` runs that startup flow in `lifecycleScope` on first creation, logs `sound_mode` and passes the loaded settings to `SeenarioController.onSettingsLoaded()`, creates `SeenarioController`, shows `SeenarioScreen`, and forwards key events. Nothing else should live there.
 - `SeenarioScreen.kt` — integration layer. `SeenarioController` wires `voice/` to `agent/` and `camera/`: phone commands (repeat, settings, reset, sound mode), agent requests with a 20 s total budget, describe fallback to `describe-scene` via `DescribeTrigger` when the agent errors, busy/error handling, and the combined camera+mic permission request with a spoken notice. A process-level `Session` object keeps the conversation history and sound mode across Activity recreation. `SeenarioScreen` composes the full-screen camera preview, the single tap layer (push-to-talk), the top status panel (status + current sound mode), and the bottom result text (liveRegion off when TTS already read it).
 - `agent/` — `AgentModels` (request/response classes for the app ↔ agent contract, `InputType`, `SoundMode`, `AgentJson`), `AgentClient` (`create()` picks `FakeAgentClient` or `SupabaseAgentClient` by `BuildConfig.USE_FAKE_AGENT`, default true, overridable in `local.properties`), `FakeAgentClient` (sample responses after 2 s), `SupabaseAgentClient` (calls Edge Function `seenario-agent`), `ConversationHistory` (last 6 messages, in memory only).
-- `sound/` — `SoundModeStore` saves `user_settings.sound_mode`. No player yet; sound actions are only logged with tag `SEENARIO_AGENT`.
+- `sound/` — `SoundModeStore` saves `user_settings.sound_mode`. `LastSoundMode` keeps the "last mode" (every user change, `off` included) in DataStore via `LastSoundModeStorage`/`DataStoreLastSoundModeStorage`. `SoundModePolicy` holds the pure rules ("소리 켜" target, startup suggestion line). No player yet; sound actions are only logged with tag `SEENARIO_AGENT`.
 - `voice/` — `VoiceController` (push-to-talk, media session, TTS via `speak()`), `SpeechListener`, `TtsSpeaker`, `CommandParser` (phone commands; anything else is `UNKNOWN` and goes to the agent as speech). Commands reach other modules through `VoiceCommandListener`.
 - `camera/` — `CameraStreamScreen` (preview + latest-frame capture on `DescribeTrigger` requests, no tap/text of its own), `FrameStreamAnalyzer`, `SceneDescriber` (calls Edge Function `describe-scene`; now used as the describe fallback). There is no public way yet to read the latest frame from outside, so agent requests omit `image` for now.
 

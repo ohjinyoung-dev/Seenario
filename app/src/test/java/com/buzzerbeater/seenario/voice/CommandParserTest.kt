@@ -29,6 +29,26 @@ class CommandParserTest {
     }
 
     @Test
+    fun basicMode_isSoundOff() {
+        assertCommand(VoiceCommand.SOUND_OFF, "기본 모드")
+        assertCommand(VoiceCommand.SOUND_OFF, "기본 모드로 가줘")
+        assertCommand(VoiceCommand.SOUND_OFF, "기본 모드로 돌아가")
+        assertCommand(VoiceCommand.SOUND_OFF, "기본으로")
+        assertCommand(VoiceCommand.SOUND_OFF, "소리 없이")
+        assertCommand(VoiceCommand.SOUND_OFF, "조용히")
+        assertCommand(VoiceCommand.SOUND_OFF, "소리 꺼")
+    }
+
+    @Test
+    fun turnOnByModeName() {
+        assertCommand(VoiceCommand.SOUND_AMBIENT, "환경음 켜")
+        assertCommand(VoiceCommand.SOUND_AMBIENT, "환경음 켜줘")
+        assertCommand(VoiceCommand.SOUND_MUSIC, "배경음 켜")
+        assertCommand(VoiceCommand.SOUND_MUSIC, "배경음 켜 줘")
+        assertCommand(VoiceCommand.SOUND_ON, "소리 켜")
+    }
+
+    @Test
     fun soundModes() {
         assertCommand(VoiceCommand.SOUND_AMBIENT, "환경음 모드")
         assertCommand(VoiceCommand.SOUND_AMBIENT, "환경음 모드로 바꿔줘")

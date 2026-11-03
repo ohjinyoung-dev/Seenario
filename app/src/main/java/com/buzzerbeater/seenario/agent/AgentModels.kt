@@ -20,7 +20,7 @@ enum class InputType(val wire: String) {
 @Serializable
 enum class SoundMode(val wire: String, val label: String) {
     @SerialName("off")
-    OFF("off", "꺼짐"),
+    OFF("off", "기본 모드"),
 
     @SerialName("ambient")
     AMBIENT("ambient", "환경음"),

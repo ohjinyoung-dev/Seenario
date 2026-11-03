@@ -18,7 +18,10 @@ import androidx.core.content.IntentCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import com.buzzerbeater.seenario.agent.SoundMode
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class VoiceStatus(val label: String) {
     IDLE("대기 중"),
@@ -47,11 +50,15 @@ data class VoiceUiState(
  *
  * [requestPermissions]를 넘기면 마이크 권한 요청을 직접 하지 않고 그쪽에 맡긴다
  * (카메라와 마이크 권한을 한 번에 묻기 위해). 이때는 시작할 때 자동으로 권한을 묻지 않는다.
+ *
+ * [startupGreeting]은 시작 안내 문장을 받아 덧붙일 말(예: 지난 모드 제안)을 붙여 돌려준다.
+ * 음성 인식을 쓰는 기기의 시작 안내에만 쓴다(말로 명령할 수 없는 기기에는 맞지 않아서).
  */
 class VoiceController(
     private val activity: ComponentActivity,
     private val listener: VoiceCommandListener,
     private val requestPermissions: (() -> Unit)? = null,
+    private val startupGreeting: suspend (String) -> String = { it },
 ) : DefaultLifecycleObserver {
 
     private val tts = TtsSpeaker(activity, ::onSpeakingChanged)
@@ -146,8 +153,22 @@ class VoiceController(
         if (speechAvailable && !hasPermission()) return
         if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         greeted = true
-        tts.speak(if (speechAvailable) GREETING else GREETING_NO_SPEECH)
-        uiState = uiState.copy(greeted = true)
+        if (!speechAvailable) {
+            tts.speak(GREETING_NO_SPEECH)
+            uiState = uiState.copy(greeted = true)
+            return
+        }
+        activity.lifecycleScope.launch {
+            // 덧붙일 말을 잠깐만 기다리고, 늦으면 원래 안내만 읽는다.
+            val text = withTimeoutOrNull(GREETING_EXTRA_WAIT_MS) { startupGreeting(GREETING) } ?: GREETING
+            if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                // 기다리는 사이 앱을 벗어났으면 다음에 돌아왔을 때 안내한다.
+                greeted = false
+                return@launch
+            }
+            tts.speak(text)
+            uiState = uiState.copy(greeted = true)
+        }
     }
 
     private fun onPermissionResult(granted: Boolean) {
@@ -267,6 +288,9 @@ class VoiceController(
                 "계속 거부되면 설정에서 마이크 권한을 켜 주세요."
         const val GREETING_NO_SPEECH = "화면을 누르면 주변을 묘사해 드려요."
         const val MSG_LISTEN_FAILED = "잘 듣지 못했어요. 다시 눌러 말해 주세요."
+
+        /** 시작 안내에 덧붙일 말을 기다리는 최대 시간. */
+        const val GREETING_EXTRA_WAIT_MS = 1_000L
 
         val TRIGGER_KEYS = setOf(
             KeyEvent.KEYCODE_HEADSETHOOK,

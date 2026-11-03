@@ -1,6 +1,7 @@
 package com.buzzerbeater.seenario
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
@@ -77,6 +78,9 @@ import com.buzzerbeater.seenario.camera.DescribeTrigger
 import com.buzzerbeater.seenario.camera.SceneDescriber
 import com.buzzerbeater.seenario.data.SupabaseProvider
 import com.buzzerbeater.seenario.data.UserSettings
+import com.buzzerbeater.seenario.sound.DataStoreLastSoundModeStorage
+import com.buzzerbeater.seenario.sound.LastSoundMode
+import com.buzzerbeater.seenario.sound.SoundModePolicy
 import com.buzzerbeater.seenario.sound.SoundModeStore
 import com.buzzerbeater.seenario.voice.VoiceCommandListener
 import com.buzzerbeater.seenario.voice.VoiceController
@@ -119,14 +123,17 @@ private object Session {
     /** 에이전트에 같이 보내는 최근 대화 기록. "처음부터"라고 하면 지운다. */
     val history = ConversationHistory()
 
-    /** 지금 소리 모드. 시작할 때 user_settings에서 읽어 온다. */
+    /** 지금 소리 모드. 앱을 켜면 항상 기본 모드(off)로 시작한다. */
     var soundMode by mutableStateOf(SoundMode.OFF)
 
-    /** "소리 켜"에 쓸, 마지막으로 켠 모드. */
-    var lastOnMode: SoundMode? = null
-
-    /** 사용자가 이미 말로 모드를 바꿨으면 늦게 도착한 시작 설정으로 덮어쓰지 않는다. */
+    /** 사용자가 이미 말로 모드를 바꿨으면 늦게 끝난 시작 처리(DB를 off로 저장)가 덮어쓰지 않게 한다. */
     var soundModeChangedByUser = false
+
+    private var lastSoundMode: LastSoundMode? = null
+
+    /** 휴대폰에 저장된 "지난 모드". 프로세스당 하나만 만든다. */
+    fun lastSoundMode(context: Context): LastSoundMode =
+        lastSoundMode ?: LastSoundMode(DataStoreLastSoundModeStorage(context)).also { lastSoundMode = it }
 }
 
 /**
@@ -143,7 +150,15 @@ class SeenarioController(
     private val activity: ComponentActivity,
 ) : VoiceCommandListener, DefaultLifecycleObserver {
 
-    val voice = VoiceController(activity, this, requestPermissions = ::requestPermissions)
+    private val lastSoundMode = Session.lastSoundMode(activity.applicationContext)
+
+    /** 시작 안내 끝에 지난 모드가 환경음/배경음이면 다시 켜는 방법을 한 줄 붙인다. */
+    val voice = VoiceController(
+        activity,
+        this,
+        requestPermissions = ::requestPermissions,
+        startupGreeting = { greeting -> SoundModePolicy.startupGreeting(greeting, lastSoundMode.get()) },
+    )
     val trigger = DescribeTrigger()
     val describer = SceneDescriber(SupabaseProvider.client)
     private val agent = AgentClient.create(SupabaseProvider.client)
@@ -280,27 +295,36 @@ class SeenarioController(
 
     override fun onSoundModeRequested(mode: SoundMode) = changeSoundMode(mode)
 
-    override fun onSoundOnRequested() = changeSoundMode(Session.lastOnMode ?: SoundMode.AMBIENT)
-
-    /** 시작할 때 MainActivity가 읽은 user_settings를 넘겨준다. */
-    fun onSettingsLoaded(settings: UserSettings) {
-        if (Session.soundModeChangedByUser) return
-        val mode = SoundMode.fromWire(settings.soundMode)
-        Session.soundMode = mode
-        if (mode != SoundMode.OFF) Session.lastOnMode = mode
+    /** "소리 켜": 지난 모드가 환경음/배경음이면 그 모드로, 기본 모드이거나 없으면 환경음으로. */
+    override fun onSoundOnRequested() {
+        activity.lifecycleScope.launch { changeSoundMode(lastSoundMode.modeForSoundOn()) }
     }
 
-    /** 소리 모드를 바꾸고 TTS로 알린 뒤 user_settings.sound_mode에 저장한다. */
+    /**
+     * 시작할 때 MainActivity가 로그인과 user_settings 읽기를 마치면 부른다.
+     * 앱은 항상 기본 모드(off)로 시작하므로 DB의 sound_mode도 off로 저장한다.
+     * 사용자가 고른 것이 아니므로 "지난 모드"에는 기록하지 않는다.
+     */
+    fun onSettingsLoaded(settings: UserSettings) {
+        if (Session.soundModeChangedByUser) return
+        Session.soundMode = SoundMode.OFF
+        if (settings.soundMode != SoundMode.OFF.wire) saveSoundModeToDb(SoundMode.OFF)
+    }
+
+    /** 소리 모드를 바꾸고 TTS로 알린 뒤, 지난 모드(휴대폰)와 user_settings.sound_mode(DB)에 저장한다. */
     private fun changeSoundMode(mode: SoundMode) {
         Session.soundModeChangedByUser = true
         Session.soundMode = mode
         if (mode == SoundMode.OFF) {
             // 소리 재생기가 아직 없어서 정지는 로그로만 남긴다.
             Log.d(AGENT_TAG, "action ${AgentAction.STOP_SOUND} (재생기 없음)")
-        } else {
-            Session.lastOnMode = mode
         }
         voice.speak(soundModeNotice(mode))
+        activity.lifecycleScope.launch { lastSoundMode.record(mode) }
+        saveSoundModeToDb(mode)
+    }
+
+    private fun saveSoundModeToDb(mode: SoundMode) {
         activity.lifecycleScope.launch {
             try {
                 soundModeStore.save(mode)
@@ -526,7 +550,7 @@ class SeenarioController(
         const val MSG_OPEN_SETTINGS = "설정 화면을 열게요. 권한에서 카메라와 마이크를 허용해 주세요."
 
         fun soundModeNotice(mode: SoundMode): String = when (mode) {
-            SoundMode.OFF -> "소리를 껐어요."
+            SoundMode.OFF -> "기본 모드로 바꿨어요."
             SoundMode.AMBIENT -> "환경음 모드로 바꿨어요."
             SoundMode.MUSIC -> "배경음 모드로 바꿨어요."
         }
