@@ -40,6 +40,27 @@ class CommandParserTest {
     }
 
     @Test
+    fun quietAndBasic_asCommand_isSoundOff() {
+        assertCommand(VoiceCommand.SOUND_OFF, "조용히 해줘")
+        assertCommand(VoiceCommand.SOUND_OFF, "조용히 해")
+        assertCommand(VoiceCommand.SOUND_OFF, "조용히 해 주세요.")
+        assertCommand(VoiceCommand.SOUND_OFF, "좀 조용히 해줘")
+        assertCommand(VoiceCommand.SOUND_OFF, "기본으로 돌아가")
+        assertCommand(VoiceCommand.SOUND_OFF, "기본으로 바꿔줘")
+        assertCommand(VoiceCommand.SOUND_OFF, "기본으로 가줘")
+    }
+
+    @Test
+    fun quietAndBasic_inQuestion_goesToAgent() {
+        assertCommand(VoiceCommand.UNKNOWN, "여기 조용히 해야 하는 곳이야?")
+        assertCommand(VoiceCommand.UNKNOWN, "조용히 해야 해?")
+        assertCommand(VoiceCommand.UNKNOWN, "조용히 해줘?")
+        assertCommand(VoiceCommand.UNKNOWN, "사람들이 조용히 이야기하고 있어?")
+        assertCommand(VoiceCommand.UNKNOWN, "기본으로 뭐가 있어?")
+        assertCommand(VoiceCommand.UNKNOWN, "여기는 기본으로 시끄러운 곳이야?")
+    }
+
+    @Test
     fun turnOnByModeName() {
         assertCommand(VoiceCommand.SOUND_AMBIENT, "환경음 켜")
         assertCommand(VoiceCommand.SOUND_AMBIENT, "환경음 켜줘")
