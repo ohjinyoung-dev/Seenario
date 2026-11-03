@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
                 val userId = repository.ensureSignedIn()
                 val settings = repository.getOrCreate(userId)
                 Log.d(TAG, "sound_mode=${settings.soundMode}")
+                seenario.onSettingsLoaded(settings)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
