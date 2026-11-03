@@ -41,11 +41,24 @@ class SceneDescriber(
         }
         val result = json.decodeFromString<DescribeResponse>(response.bodyAsText())
         Log.d(TAG, "describe ok in ${SystemClock.elapsedRealtime() - startMs}ms (model=${result.model})")
+        if (result.soundMode != null) {
+            // 배경음/환경음 모드: 서버가 고른 음원(재생은 아직 미구현, 확인용 로그)
+            Log.d(TAG, "sound mode=${result.soundMode} tags=${result.tags} sound=${result.sound?.title ?: "none"}")
+        }
         return result.description
     }
 
     @Serializable
-    private data class DescribeResponse(val description: String, val model: String? = null)
+    private data class DescribeResponse(
+        val description: String,
+        val model: String? = null,
+        val soundMode: String? = null,
+        val tags: List<String> = emptyList(),
+        val sound: SoundInfo? = null,
+    )
+
+    @Serializable
+    private data class SoundInfo(val id: String, val title: String, val url: String, val loopable: Boolean = true)
 
     private companion object {
         const val TAG = "SEENARIO"

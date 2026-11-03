@@ -2,8 +2,11 @@
 // - Gemini API 키는 Edge Function secret(GEMINI_API_KEY)에만 둔다. 앱에는 절대 넣지 않는다.
 // - 이미지는 묘사에만 쓰고 저장하지 않는다.
 // - 로그인한(익명 포함) 사용자만 호출할 수 있다.
+// - 사용자의 sound_mode가 ambient(환경음)/music(배경음악)이면 분위기 태그도 함께 받아
+//   sounds 테이블에서 가장 잘 맞는 음원을 골라 재생 URL을 같이 돌려준다. off(기본)면 묘사만 돌려준다.
 
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { normalizeTags, SOUND_TAG_KEYS, SOUND_TAGS, type SoundTag } from "./sound_tags.ts";
 
 const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-flash-latest";
@@ -18,6 +21,32 @@ const PROMPT = `너는 시각장애인을 위해 지금 눈앞의 풍경을 들�
 - 발밑의 장애물처럼 안전에 중요한 것이 보이면 마지막에 짧게 알려 줘.
 - 사진이 너무 어둡거나 흐려서 알아보기 어렵다면 솔직하게 그렇다고 말해.
 - 목록, 기호, 이모지 없이 문장만 출력해.`;
+
+type SoundMode = "ambient" | "music";
+const SOUND_MODES = new Set<string>(["ambient", "music"]);
+const SOUND_BUCKET = "sounds";
+const SOUND_URL_EXPIRES_SEC = 60 * 60; // 재생 URL 유효 시간(1시간)
+const MAX_TAGS = 6;
+
+const TAG_GUIDE = SOUND_TAG_KEYS.map((k) => `${k}(${SOUND_TAGS[k]})`).join(", ");
+
+// 배경음/환경음 모드에서만 붙는 추가 지시. 응답은 JSON(description, tags)으로 받는다.
+const TAG_PROMPT = `
+
+추가로, 이 장면에 어울리는 소리를 고르기 위한 분위기 태그를 3~${MAX_TAGS}개 골라 줘.
+- 반드시 아래 목록의 영문 단어 중에서만 골라.
+- 장소, 날씨, 계절, 시간대, 분위기 중 사진에서 알 수 있는 것만 골라. 모르는 건 고르지 마.
+- 목록: ${TAG_GUIDE}
+- description에는 위 규칙대로 쓴 묘사 문장을, tags에는 고른 태그를 넣어.`;
+
+const TAG_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    description: { type: "STRING" },
+    tags: { type: "ARRAY", items: { type: "STRING", enum: SOUND_TAG_KEYS } },
+  },
+  required: ["description", "tags"],
+};
 
 // 모델 후보. 앞 모델이 [HEDGE_DELAY_MS] 안에 답하지 않으면 기존 요청은 둔 채 다음 모델을 함께 출발시키고,
 // 가장 먼저 성공한 응답을 쓴다(나머지는 취소). 앞 모델이 오류로 끝나면 즉시 다음 모델을 출발시킨다.
@@ -115,6 +144,61 @@ function callGemini(body: string): Promise<GeminiResult> {
   });
 }
 
+type SoundRow = { id: string; title: string; mode: SoundMode; file_path: string; loopable: boolean; tags: string[] };
+type PickedSound = { id: string; title: string; mode: SoundMode; url: string; loopable: boolean; tags: string[] };
+
+/** 사용자 설정의 sound_mode. 행이 없거나 읽기에 실패하면 기본값(off)으로 본다. */
+async function loadSoundMode(supabase: SupabaseClient): Promise<SoundMode | null> {
+  const { data, error } = await supabase.from("user_settings").select("sound_mode").maybeSingle();
+  if (error) {
+    console.error("user_settings read failed", error.message);
+    return null;
+  }
+  const mode = data?.sound_mode;
+  return typeof mode === "string" && SOUND_MODES.has(mode) ? (mode as SoundMode) : null;
+}
+
+/**
+ * 모드가 같은 음원 중 태그가 가장 많이 겹치는 것을 고른다(동점이면 무작위).
+ * 하나도 겹치지 않으면 엉뚱한 소리가 나지 않도록 고르지 않는다.
+ */
+async function pickSound(supabase: SupabaseClient, mode: SoundMode, tags: SoundTag[]): Promise<PickedSound | null> {
+  if (tags.length === 0) return null;
+  const { data, error } = await supabase
+    .from("sounds")
+    .select("id, title, mode, file_path, loopable, tags")
+    .eq("mode", mode)
+    .overlaps("tags", tags);
+  if (error) {
+    console.error("sounds read failed", error.message);
+    return null;
+  }
+  const rows = (data ?? []) as SoundRow[];
+  if (rows.length === 0) return null;
+
+  const wanted = new Set<string>(tags);
+  const scored = rows.map((r) => ({ r, score: r.tags.filter((t) => wanted.has(t)).length }));
+  const best = Math.max(...scored.map((s) => s.score));
+  const top = scored.filter((s) => s.score === best);
+  const chosen = top[Math.floor(Math.random() * top.length)].r;
+
+  const { data: signed, error: urlError } = await supabase.storage
+    .from(SOUND_BUCKET)
+    .createSignedUrl(chosen.file_path, SOUND_URL_EXPIRES_SEC);
+  if (urlError || !signed?.signedUrl) {
+    console.error("sound signed url failed", chosen.file_path, urlError?.message);
+    return null;
+  }
+  return {
+    id: chosen.id,
+    title: chosen.title,
+    mode: chosen.mode,
+    url: signed.signedUrl,
+    loopable: chosen.loopable,
+    tags: chosen.tags,
+  };
+}
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -128,11 +212,16 @@ Deno.serve(async (req) => {
   // 호출자 확인 (익명 로그인 사용자도 허용)
   const token = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) return json({ error: "unauthorized" }, 401);
+  // 사용자 토큰을 실어 보내 RLS가 이 사용자 기준으로 적용되게 한다.
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: `Bearer ${token}` } } },
   );
-  const { data: userData, error: authError } = await supabase.auth.getUser(token);
+  const [{ data: userData, error: authError }, soundMode] = await Promise.all([
+    supabase.auth.getUser(token),
+    loadSoundMode(supabase),
+  ]);
   if (authError || !userData.user) return json({ error: "unauthorized" }, 401);
 
   let image: unknown;
@@ -154,27 +243,49 @@ Deno.serve(async (req) => {
     contents: [{
       role: "user",
       parts: [
-        { text: PROMPT },
+        { text: soundMode ? PROMPT + TAG_PROMPT : PROMPT },
         { inline_data: { mime_type: mime, data: image } },
       ],
     }],
     // 풍경 묘사는 깊은 추론이 필요 없으므로 생각 단계를 최소로 줄여 응답 속도를 높인다.
-    generationConfig: { thinkingConfig: { thinkingLevel: "minimal" } },
+    generationConfig: {
+      thinkingConfig: { thinkingLevel: "minimal" },
+      ...(soundMode ? { responseMimeType: "application/json", responseSchema: TAG_RESPONSE_SCHEMA } : {}),
+    },
   });
 
   const result = await callGemini(requestBody);
   // 실패 시 모델별 상태 코드만 돌려준다(진단용, 민감 정보 없음).
   if (!result.data) return json({ error: "gemini_failed", attempts: result.attempts }, 502);
 
-  const description = (result.data?.candidates?.[0]?.content?.parts ?? [])
+  const text = (result.data?.candidates?.[0]?.content?.parts ?? [])
     .map((p: { text?: string; thought?: boolean }) => (p.thought ? "" : p.text ?? ""))
     .join("")
     .trim();
+
+  let description = text;
+  let tags: SoundTag[] = [];
+  if (soundMode) {
+    try {
+      // 일부 모델이 ```json 코드 블록으로 감싸 보내는 경우를 대비한다.
+      const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+      description = typeof parsed?.description === "string" ? parsed.description.trim() : "";
+      tags = normalizeTags(parsed?.tags).slice(0, MAX_TAGS);
+    } catch {
+      // JSON이 아니면 문장 그대로를 묘사로 쓰고 음원은 고르지 않는다.
+      console.error("Gemini tag response not JSON", result.model, text.slice(0, 200));
+    }
+  }
 
   if (!description) {
     console.error("Gemini empty response", result.model, JSON.stringify(result.data).slice(0, 500));
     return json({ error: "empty_description" }, 502);
   }
 
-  return json({ description, model: result.model });
+  if (!soundMode) return json({ description, model: result.model });
+
+  // 음원을 못 골라도 묘사는 그대로 돌려준다(sound: null).
+  const sound = await pickSound(supabase, soundMode, tags);
+  console.log("sound pick", soundMode, JSON.stringify(tags), sound?.id ?? "none");
+  return json({ description, model: result.model, soundMode, tags, sound });
 });
