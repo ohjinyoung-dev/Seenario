@@ -6,14 +6,14 @@ import kotlinx.serialization.json.Json
 
 /** 에이전트에 보내는 입력 종류. */
 @Serializable
-enum class InputType {
+enum class InputType(val wire: String) {
     /** 사용자가 한 말(질문, 대화). */
     @SerialName("speech")
-    SPEECH,
+    SPEECH("speech"),
 
     /** "묘사해줘" 또는 화면 길게 누르기. */
     @SerialName("describe")
-    DESCRIBE,
+    DESCRIBE("describe"),
 }
 
 /** 소리 모드. 사용자가 말로 고르고 `user_settings.sound_mode`에 [wire] 값으로 저장한다. */

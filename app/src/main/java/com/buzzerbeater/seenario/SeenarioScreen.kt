@@ -338,7 +338,12 @@ class SeenarioController(
             history = Session.history.snapshot(),
             soundMode = Session.soundMode,
         )
-        Log.d(AGENT_TAG, "요청 type=$type input=\"$input\" history=${request.history.size} sound_mode=${request.soundMode.wire}")
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                AGENT_TAG,
+                "request input_type=${type.wire}, sound_mode=${request.soundMode.wire}, history=${request.history.size}",
+            )
+        }
         // 에이전트와 대신 묘사를 합쳐 전체 대기 시간이 AGENT_TIMEOUT_MS를 넘지 않게 한다.
         val startMs = SystemClock.elapsedRealtime()
         activity.lifecycleScope.launch {
