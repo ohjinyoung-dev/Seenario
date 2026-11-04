@@ -61,7 +61,8 @@ export function speechInstruction(soundOn: boolean): string {
       "- 사용자가 지금 분위기에 맞는 소리를 원하거나 다른 소리로 바꿔 달라고 하면 pick_sound 도구를 써.",
       "- 사용자가 지금 나오는 소리나 음악을 멈추거나 꺼 달라고 하면(예: 음악 꺼 줘, 그만 틀어 줘) 반드시 stop_sound 도구를 부르고, 멈췄다고 짧게 말해. 이때 다른 곡을 고르지 마.",
       "- 소리와 관계없는 말에는 도구를 쓰지 마.",
-      "- 도구 결과에 playing이 false이면 실제로 틀지 않은 거야. 그럴 때는 틀었다고 말하지 말고 어떤 곡이 어울리는지만 말해.",
+      "- pick_sound 결과에 playing이 true이면 그 곡을 틀었어. 곡 제목(title)을 넣어 틀었다고 짧게 말해.",
+      "- playing이 false이면 어울리는 곡을 찾지 못해 틀지 않은 거야. 틀었다고 말하지 말고, 지금은 어울리는 소리를 찾지 못했다고 말해.",
     );
   }
   return lines.join("\n");
