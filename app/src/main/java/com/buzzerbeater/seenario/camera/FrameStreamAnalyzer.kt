@@ -2,7 +2,13 @@ package com.buzzerbeater.seenario.camera
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.hardware.camera2.CaptureRequest
 import android.os.SystemClock
+import android.util.Range
+import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.core.ExtendableBuilder
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import kotlinx.coroutines.channels.BufferOverflow
@@ -35,13 +41,30 @@ class FrameStreamAnalyzer(
     @Volatile
     var enabled: Boolean = true
 
+    /** true면(절전 모드) 1초마다 만들지 않고 [requestFrame]으로 요청받았을 때만 1장 만든다. */
+    @Volatile
+    var onDemand: Boolean = false
+
+    @Volatile
+    private var requested = false
+
+    @Volatile
     private var lastEmitMs = 0L
+
+    /** 다음 프레임을 바로 만들어 내보내게 한다(절전 모드에서 사진이 필요할 때). */
+    fun requestFrame() {
+        requested = true
+    }
 
     override fun analyze(image: ImageProxy) {
         image.use {
             val now = SystemClock.elapsedRealtime()
             if (!enabled || _frames.subscriptionCount.value == 0) return
-            if (now - lastEmitMs < intervalMs) return
+            if (requested) {
+                requested = false
+            } else if (onDemand || now - lastEmitMs < intervalMs) {
+                return
+            }
             lastEmitMs = now
 
             val frame = encode(it, now)
@@ -73,10 +96,22 @@ class FrameStreamAnalyzer(
     }
 
     companion object {
-        /** 이 분석기에 맞게 설정된 ImageAnalysis use case를 만든다. */
-        fun buildUseCase(): ImageAnalysis = ImageAnalysis.Builder()
+        /**
+         * 이 분석기에 맞게 설정된 ImageAnalysis use case를 만든다.
+         * [powerSave]면 YUV로 받는다. 프레임마다 RGBA로 바꾸는 일을 하지 않고, 필요할 때만 [ImageProxy.toBitmap]으로 바꾼다.
+         */
+        fun buildUseCase(powerSave: Boolean = false, fps: Range<Int>? = null): ImageAnalysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .setOutputImageFormat(
+                if (powerSave) ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888 else ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888,
+            )
+            .also { builder -> fps?.let { setTargetFps(builder, it) } }
             .build()
+
+        /** 카메라 프레임 속도를 [fps] 범위로 요청한다(미리보기와 분석 모두 같은 값을 줘야 한다). */
+        @OptIn(ExperimentalCamera2Interop::class)
+        fun setTargetFps(builder: ExtendableBuilder<*>, fps: Range<Int>) {
+            Camera2Interop.Extender(builder).setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fps)
+        }
     }
 }

@@ -30,4 +30,7 @@ interface VoiceCommandListener {
 
     /** "처음부터": 대화 기록을 지운다. */
     fun onResetRequested() {}
+
+    /** "절전 모드 켜"([on] = true) / "절전 모드 꺼"(false). */
+    fun onPowerSaveRequested(on: Boolean) {}
 }
