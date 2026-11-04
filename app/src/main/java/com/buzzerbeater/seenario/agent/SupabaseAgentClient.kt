@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.buzzerbeater.seenario.data.UserSettingsRepository
 import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.exceptions.RestException
 import io.github.jan.supabase.functions.functions
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.setBody
@@ -25,10 +26,15 @@ class SupabaseAgentClient(
         // Edge Function이 사용자 토큰을 요구하므로 세션을 먼저 확보한다.
         userRepository.ensureSignedIn()
         val startMs = SystemClock.elapsedRealtime()
-        val response = supabase.functions.invoke(FUNCTION_NAME) {
-            contentType(ContentType.Application.Json)
-            setBody(AgentJson.encodeRequest(request))
-            timeout { requestTimeoutMillis = REQUEST_TIMEOUT_MS }
+        val response = try {
+            supabase.functions.invoke(FUNCTION_NAME) {
+                contentType(ContentType.Application.Json)
+                setBody(AgentJson.encodeRequest(request))
+                timeout { requestTimeoutMillis = REQUEST_TIMEOUT_MS }
+            }
+        } catch (e: RestException) {
+            // 상태 코드와 에러 코드(예: 400 image_required)만 넘긴다. 부르는 쪽이 대신할 동작을 정한다.
+            throw AgentServerException(e.statusCode, AgentJson.parseErrorCode(e.error))
         }
         val result = AgentJson.parseResponse(response.bodyAsText())
         Log.d(TAG, "agent ok in ${SystemClock.elapsedRealtime() - startMs}ms")

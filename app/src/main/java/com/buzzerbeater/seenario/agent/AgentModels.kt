@@ -2,7 +2,11 @@ package com.buzzerbeater.seenario.agent
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /** 에이전트에 보내는 입력 종류. */
 @Serializable
@@ -14,6 +18,10 @@ enum class InputType(val wire: String) {
     /** "묘사해줘" 또는 화면 길게 누르기. */
     @SerialName("describe")
     DESCRIBE("describe"),
+
+    /** 소리 모드를 켤 때 소리만 고르는 조용한 요청(input은 ""). 응답의 speech는 읽지 않는다. */
+    @SerialName("sound")
+    SOUND("sound"),
 }
 
 /** 소리 모드. 사용자가 말로 고르고 `user_settings.sound_mode`에 [wire] 값으로 저장한다. */
@@ -66,7 +74,7 @@ data class AgentResponse(
     val actions: List<AgentAction> = emptyList(),
 )
 
-/** 앱이 할 일. 지금은 소리 재생기가 없어서 로그로만 남긴다. */
+/** 앱이 할 일. `sound/SoundPlayer`가 실행한다. */
 @Serializable
 data class AgentAction(
     /** "play_sound" 또는 "stop_sound". */
@@ -94,4 +102,14 @@ object AgentJson {
     fun encodeRequest(request: AgentRequest): String = json.encodeToString(AgentRequest.serializer(), request)
 
     fun parseResponse(text: String): AgentResponse = json.decodeFromString(AgentResponse.serializer(), text)
+
+    /** 서버 에러 본문 `{"error":"image_required"}`에서 에러 코드를 꺼낸다. 형식이 다르면 null. */
+    fun parseErrorCode(body: String): String? = try {
+        (json.parseToJsonElement(body) as? JsonObject)?.get("error")?.let { (it as? JsonPrimitive)?.contentOrNull }
+    } catch (e: SerializationException) {
+        null
+    }
 }
+
+/** Edge Function이 에러 상태 코드로 응답했을 때. [code]는 본문의 `error` 값(없으면 null). */
+class AgentServerException(val status: Int, val code: String?) : Exception("agent server error $status ${code.orEmpty()}")

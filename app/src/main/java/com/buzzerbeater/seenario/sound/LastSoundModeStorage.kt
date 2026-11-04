@@ -19,7 +19,7 @@ interface LastSoundModeStorage {
     suspend fun save(mode: SoundMode)
 }
 
-private val Context.soundModeDataStore: DataStore<Preferences> by preferencesDataStore(name = "sound_mode")
+internal val Context.soundModeDataStore: DataStore<Preferences> by preferencesDataStore(name = "sound_mode")
 
 /** DataStore(Preferences)에 저장한다. 읽기/쓰기 실패는 로그만 남기고 넘어간다. */
 class DataStoreLastSoundModeStorage(context: Context) : LastSoundModeStorage {
