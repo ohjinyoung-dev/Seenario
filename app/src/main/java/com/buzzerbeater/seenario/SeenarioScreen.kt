@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
@@ -82,8 +84,14 @@ import com.buzzerbeater.seenario.data.SupabaseProvider
 import com.buzzerbeater.seenario.data.UserSettings
 import com.buzzerbeater.seenario.sound.DataStoreLastSoundModeStorage
 import com.buzzerbeater.seenario.sound.LastSoundMode
+import com.buzzerbeater.seenario.sound.MediaPlayerSoundEngine
+import com.buzzerbeater.seenario.sound.SoundCache
+import com.buzzerbeater.seenario.sound.SoundLog
+import com.buzzerbeater.seenario.sound.SoundNoticeStorage
 import com.buzzerbeater.seenario.sound.SoundModePolicy
 import com.buzzerbeater.seenario.sound.SoundModeStore
+import com.buzzerbeater.seenario.sound.SoundPlayer
+import com.buzzerbeater.seenario.voice.TalkBackSpeechMonitor
 import com.buzzerbeater.seenario.voice.VoiceCommandListener
 import com.buzzerbeater.seenario.voice.VoiceController
 import com.buzzerbeater.seenario.voice.VoiceStatus
@@ -91,6 +99,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -169,6 +179,27 @@ class SeenarioController(
     private val agent = AgentClient.create(SupabaseProvider.client)
     private val soundModeStore = SoundModeStore(SupabaseProvider.client)
 
+    /** 에이전트 응답의 play_sound / stop_sound를 실행한다. */
+    private val player = SoundPlayer(
+        scope = activity.lifecycleScope,
+        source = SoundCache(activity.applicationContext),
+        engineFactory = ::MediaPlayerSoundEngine,
+        onStarted = { onSoundStarted() },
+    )
+    private val soundNotice = SoundNoticeStorage(activity.applicationContext)
+
+    /** 처음 소리를 틀 때 하는 안전 안내를 이미 했는지. 저장소에서 읽기 전에는 false. */
+    private var soundNoticeDone = false
+
+    /** TalkBack이 말하는 중인지(API 30 이상에서만 알 수 있다). 소리를 낮출 때 쓴다. */
+    private var talkBackSpeaking by mutableStateOf(false)
+    private val talkBackMonitor = TalkBackSpeechMonitor(
+        activity.applicationContext,
+        Handler(Looper.getMainLooper()),
+        onStartedSpeaking = { talkBackSpeaking = true },
+        onStoppedSpeaking = { talkBackSpeaking = false },
+    )
+
     /** 에이전트(또는 대신하는 describe-scene) 응답을 기다리는 중. */
     var thinking by mutableStateOf(false)
         private set
@@ -226,6 +257,8 @@ class SeenarioController(
         activity.lifecycle.addObserver(voice)
         activity.lifecycle.addObserver(this)
         if (startupQuiet) quietTalkBackDuringStartup()
+        activity.lifecycleScope.launch { soundNoticeDone = soundNoticeDone || soundNotice.isDone() }
+        duckWhileSpeaking()
     }
 
     fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean = voice.handleKeyDown(keyCode, event)
@@ -237,6 +270,31 @@ class SeenarioController(
         if (!startupPermissionAsked) {
             startupPermissionAsked = true
             requestPermissions()
+        }
+    }
+
+    /** 앱이 화면에서 사라지면 소리를 바로 멈춘다. 돌아와도 다시 틀지 않고 다음 play_sound를 기다린다. */
+    override fun onStop(owner: LifecycleOwner) {
+        player.stop(fade = false, reason = "앱이 화면에서 사라짐")
+    }
+
+    override fun onDestroy(owner: LifecycleOwner) {
+        player.release()
+        talkBackMonitor.release()
+    }
+
+    /**
+     * 씨나리오 TTS나 TalkBack이 말하는 동안 소리를 원래 볼륨의 30%로 낮추고, 끝나면 되돌린다.
+     * 문장 사이의 짧은 쉼에 볼륨이 오르내리지 않도록 조용해진 뒤 [UNDUCK_DELAY_MS] 기다렸다가 되돌린다.
+     */
+    private fun duckWhileSpeaking() {
+        activity.lifecycleScope.launch {
+            snapshotFlow { voice.uiState.status == VoiceStatus.SPEAKING || talkBackSpeaking }
+                .distinctUntilChanged()
+                .collectLatest { speaking ->
+                    if (!speaking) delay(UNDUCK_DELAY_MS)
+                    player.setDucking(speaking)
+                }
         }
     }
 
@@ -318,12 +376,11 @@ class SeenarioController(
 
     /** 소리 모드를 바꾸고 TTS로 알린 뒤, 지난 모드(휴대폰)와 user_settings.sound_mode(DB)에 저장한다. */
     private fun changeSoundMode(mode: SoundMode) {
+        val old = Session.soundMode
         Session.soundModeChangedByUser = true
         Session.soundMode = mode
-        if (mode == SoundMode.OFF) {
-            // 소리 재생기가 아직 없어서 정지는 로그로만 남긴다.
-            Log.d(AGENT_TAG, "action ${AgentAction.STOP_SOUND} (재생기 없음)")
-        }
+        // 기본 모드로 바뀌거나 환경음 ↔ 배경음으로 바뀌면 지금 소리를 페이드로 멈춘다(다음 응답의 play_sound를 기다림).
+        player.onSoundModeChanged(old, mode)
         voice.speak(soundModeNotice(mode))
         activity.lifecycleScope.launch { lastSoundMode.record(mode) }
         saveSoundModeToDb(mode)
@@ -396,7 +453,7 @@ class SeenarioController(
             }
             val remainingMs = AGENT_TIMEOUT_MS - (SystemClock.elapsedRealtime() - startMs)
             when {
-                response != null -> onAgentResponse(input, response)
+                response != null -> onAgentResponse(input, response, request.soundMode)
                 type == InputType.DESCRIBE && remainingMs > 0 -> startFallbackDescribe(input, remainingMs)
                 else -> failAgent()
             }
@@ -408,12 +465,43 @@ class SeenarioController(
         show(MSG_ERROR)
     }
 
-    private fun onAgentResponse(input: String, response: AgentResponse) {
+    private fun onAgentResponse(input: String, response: AgentResponse, requestMode: SoundMode) {
         thinking = false
-        response.actions.forEach { Log.d(AGENT_TAG, "action $it (재생기 없음, 로그만)") }
+        val willPlay = runSoundActions(response.actions, requestMode)
         Session.history.addExchange(input, response.speech)
         lastAnswer = response.speech
-        show(response.display, speech = response.speech)
+        // 처음 소리를 틀 때는 응답 뒤에 안전 안내를 이어 읽는다(TTS만. 화면, 대화 기록, "다시"에는 넣지 않음).
+        val speech = if (willPlay && !soundNoticeDone) "${response.speech} $MSG_SOUND_SAFETY" else response.speech
+        show(response.display, speech = speech)
+    }
+
+    /**
+     * 응답의 소리 지시를 실행한다. 새 소리를 틀기 시작하면 true.
+     * 응답을 기다리는 동안 기본 모드로 바뀌었거나 다른 소리 모드로 바뀌었으면 play_sound는 실행하지 않는다.
+     */
+    private fun runSoundActions(actions: List<AgentAction>, requestMode: SoundMode): Boolean {
+        var willPlay = false
+        actions.forEach { action ->
+            Log.d(AGENT_TAG, "action type=${action.type}, sound_id=${action.soundId}, title=${action.title}")
+            if (action.type == AgentAction.PLAY_SOUND) {
+                val mode = Session.soundMode
+                if (mode == SoundMode.OFF || mode != requestMode) {
+                    SoundLog.d("play_sound 무시: 지금 모드 ${mode.wire}, 요청할 때 모드 ${requestMode.wire}")
+                    return@forEach
+                }
+                if (player.canStart(action) && player.play(action)) willPlay = true
+            } else {
+                player.handle(action)
+            }
+        }
+        return willPlay
+    }
+
+    /** 소리가 실제로 재생되기 시작하면 안전 안내를 한 것으로 기록한다(다운로드에 실패하면 다음에 다시 안내). */
+    private fun onSoundStarted() {
+        if (soundNoticeDone) return
+        soundNoticeDone = true
+        activity.lifecycleScope.launch { soundNotice.markDone() }
     }
 
     /**
@@ -542,6 +630,11 @@ class SeenarioController(
         /** 에이전트 응답과 대신하는 describe-scene 묘사를 합쳐 기다리는 최대 시간. */
         const val AGENT_TIMEOUT_MS = 20_000L
         const val SPEECH_WAIT_MS = 15_000L
+
+        /** 말이 끝나고 이만큼 조용하면 소리 볼륨을 되돌린다. */
+        const val UNDUCK_DELAY_MS = 500L
+
+        const val MSG_SOUND_SAFETY = "분위기를 위한 효과음이에요. 주변 소리가 잘 들리도록 안전한 곳에서 사용해 주세요."
 
         const val MSG_LOOKING = "잠시만요, 주변을 살펴볼게요."
         const val TEXT_LOOKING = "주변을 살펴보고 있어요…"

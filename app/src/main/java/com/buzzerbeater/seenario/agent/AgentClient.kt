@@ -10,6 +10,6 @@ interface AgentClient {
     companion object {
         /** `BuildConfig.USE_FAKE_AGENT`가 true면 가짜 응답, false면 Edge Function `seenario-agent`. */
         fun create(supabase: SupabaseClient): AgentClient =
-            if (BuildConfig.USE_FAKE_AGENT) FakeAgentClient() else SupabaseAgentClient(supabase)
+            if (BuildConfig.USE_FAKE_AGENT) FakeAgentClient(supabase) else SupabaseAgentClient(supabase)
     }
 }

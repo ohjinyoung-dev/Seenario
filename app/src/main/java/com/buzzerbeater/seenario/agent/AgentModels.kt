@@ -66,7 +66,7 @@ data class AgentResponse(
     val actions: List<AgentAction> = emptyList(),
 )
 
-/** 앱이 할 일. 지금은 소리 재생기가 없어서 로그로만 남긴다. */
+/** 앱이 할 일. `sound/SoundPlayer`가 실행한다. */
 @Serializable
 data class AgentAction(
     /** "play_sound" 또는 "stop_sound". */

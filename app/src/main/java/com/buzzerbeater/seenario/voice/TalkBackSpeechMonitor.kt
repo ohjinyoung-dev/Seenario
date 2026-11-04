@@ -22,6 +22,8 @@ class TalkBackSpeechMonitor(
     handler: Handler,
     /** TalkBack이 조용하다가 말하기 시작했을 때(메인 스레드). */
     private val onStartedSpeaking: () -> Unit,
+    /** TalkBack이 말하다가 멈췄을 때(메인 스레드). 문장 사이 쉼에도 불릴 수 있다. */
+    private val onStoppedSpeaking: () -> Unit = {},
 ) {
 
     private val audioManager = context.getSystemService(AudioManager::class.java)
@@ -77,7 +79,9 @@ class TalkBackSpeechMonitor(
         val nowActive = configs.any { it.audioAttributes.usage == AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY }
         if (active || nowActive) lastActiveAt = SystemClock.uptimeMillis()
         val started = nowActive && !active
+        val stopped = !nowActive && active
         active = nowActive
         if (notify && started && isEnabled) onStartedSpeaking()
+        if (notify && stopped) onStoppedSpeaking()
     }
 }
