@@ -100,7 +100,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 ```json
 {
   "input": "string",
-  "input_type": "speech | describe",
+  "input_type": "speech | describe | sound",
   "image": "base64 JPEG",
   "history": [{ "role": "user | agent", "text": "string" }],
   "sound_mode": "off | ambient | music"
@@ -125,6 +125,15 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
   }]
 }
 ```
+
+#### input_type `"sound"` (소리만 고르는 요청)
+
+- 소리 모드를 켤 때 소리만 고르는 요청이다. 묘사 문장을 만들지 않고 Gemini를 1번만 부른다.
+- 요청: `{ "input_type": "sound", "image", "sound_mode": "ambient | music", "history"(선택), "input": "" }`
+- 응답: `{ "speech": "", "display": "", "actions": [play_sound] 또는 [] }`
+- `sound_mode`가 `off`면 400, 사진이 없으면 400 `image_required`, 어울리는 소리가 없으면 `actions`는 빈 배열이다.
+- 서버 처리(서버 담당): 사진에서 `SOUND_TAGS` 태그와 `existing_sounds`를 뽑고 `tools/sound.ts`의 `pickSound`를 부른다.
+- 앱 처리(앱 담당): 모드를 켤 때 조용한 소리 요청으로 보내고, `speech`는 읽지 않는다.
 
 ### 소리 고르기 도구 (`tools/sound.ts`, 앱 담당)
 
