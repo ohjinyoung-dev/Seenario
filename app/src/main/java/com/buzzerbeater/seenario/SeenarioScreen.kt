@@ -85,8 +85,8 @@ import com.buzzerbeater.seenario.data.UserSettings
 import com.buzzerbeater.seenario.sound.DataStoreLastSoundModeStorage
 import com.buzzerbeater.seenario.sound.LastSoundMode
 import com.buzzerbeater.seenario.sound.MediaPlayerSoundEngine
+import com.buzzerbeater.seenario.sound.SoundActionRunner
 import com.buzzerbeater.seenario.sound.SoundCache
-import com.buzzerbeater.seenario.sound.SoundLog
 import com.buzzerbeater.seenario.sound.SoundNoticeStorage
 import com.buzzerbeater.seenario.sound.SoundModePolicy
 import com.buzzerbeater.seenario.sound.SoundModeStore
@@ -193,12 +193,8 @@ class SeenarioController(
     private val soundRequester = SoundRequester(agent)
     private var soundRequestJob: Job? = null
 
-    /**
-     * 소리를 바꿀 수 있는 요청(대화 요청과 조용한 소리 요청)에 보내는 순서대로 붙이는 번호.
-     * 더 나중에 보낸 요청의 소리가 이미 정해졌으면, 늦게 도착한 이전 요청의 play_sound는 버린다(최신 요청 우선).
-     */
-    private var soundSeq = 0
-    private var appliedSoundSeq = 0
+    /** 응답의 소리 지시를 최신 요청 우선 규칙([com.buzzerbeater.seenario.sound.SoundRequestOrder])으로 실행한다. */
+    private val soundActions = SoundActionRunner(player)
 
     /** 처음 소리를 틀 때 하는 안전 안내를 이미 했는지. 저장소에서 읽기 전에는 false. */
     private var soundNoticeDone = false
@@ -287,7 +283,7 @@ class SeenarioController(
 
     /** 앱이 화면에서 사라지면 소리를 바로 멈춘다. 돌아와도 다시 틀지 않고 다음 play_sound를 기다린다. */
     override fun onStop(owner: LifecycleOwner) {
-        soundRequestJob?.cancel()
+        cancelSoundRequest("앱이 화면에서 사라짐")
         player.stop(fade = false, reason = "앱이 화면에서 사라짐")
     }
 
@@ -397,7 +393,7 @@ class SeenarioController(
         // 처음 소리를 켤 때는 모드 안내 뒤에 안전 안내를 이어 읽는다(소리 요청의 응답은 읽지 않으므로).
         val turningOn = mode != SoundMode.OFF
         voice.speak(if (turningOn && !soundNoticeDone) "${soundModeNotice(mode)} $MSG_SOUND_SAFETY" else soundModeNotice(mode))
-        if (turningOn) requestSound(mode, sameMode = old == mode) else soundRequestJob?.cancel()
+        if (turningOn) requestSound(mode, sameMode = old == mode) else cancelSoundRequest("기본 모드로 바뀜")
         activity.lifecycleScope.launch { lastSoundMode.record(mode) }
         saveSoundModeToDb(mode)
     }
@@ -424,8 +420,8 @@ class SeenarioController(
             Log.d(AGENT_TAG, "[sound] 같은 모드에서 이미 재생 중이라 요청하지 않음")
             return
         }
-        soundRequestJob?.cancel()
-        val seq = ++soundSeq
+        cancelSoundRequest("새 소리 요청")
+        val seq = soundActions.nextRequest()
         val image = frames.latest()?.jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
         soundRequestJob = activity.lifecycleScope.launch {
             val result = try {
@@ -435,6 +431,16 @@ class SeenarioController(
                 null
             } ?: return@launch
             runSoundActions(result.actions, mode, seq)
+        }
+    }
+
+    /** 진행 중인 조용한 소리 요청이 있으면 취소한다. */
+    private fun cancelSoundRequest(reason: String) {
+        val job = soundRequestJob ?: return
+        soundRequestJob = null
+        if (job.isActive) {
+            job.cancel()
+            Log.d(AGENT_TAG, "[sound] 요청 취소 ($reason)")
         }
     }
 
@@ -474,7 +480,7 @@ class SeenarioController(
                     "history=${request.history.size}, image=$image",
             )
         }
-        val seq = ++soundSeq
+        val seq = soundActions.nextRequest()
         // 에이전트와 대신 묘사를 합쳐 전체 대기 시간이 AGENT_TIMEOUT_MS를 넘지 않게 한다.
         val startMs = SystemClock.elapsedRealtime()
         activity.lifecycleScope.launch {
@@ -518,34 +524,22 @@ class SeenarioController(
     /**
      * 응답의 소리 지시를 실행한다. 새 소리를 틀기 시작하면 true.
      * 다음 경우에는 play_sound를 실행하지 않는다.
-     * - 응답을 기다리는 동안 기본 모드나 다른 소리 모드로 바뀜
-     * - 더 나중에 보낸 요청([seq]보다 큰 번호)의 소리가 이미 정해짐(최신 요청 우선)
-     * - 앱이 화면에 없음
+     * - 응답을 기다리는 동안 기본 모드나 다른 소리 모드로 바뀜, 앱이 화면에 없음 (여기서 판단)
+     * - 더 나중에 보낸 요청의 소리 지시(play_sound/stop_sound)가 이미 실행됨 ([SoundActionRunner]가 판단)
      */
     private fun runSoundActions(actions: List<AgentAction>, requestMode: SoundMode, seq: Int): Boolean {
-        var willPlay = false
-        actions.forEach { action ->
-            Log.d(AGENT_TAG, "action type=${action.type}, sound_id=${action.soundId}, title=${action.title}")
-            if (action.type == AgentAction.PLAY_SOUND) {
-                val mode = Session.soundMode
-                val reason = when {
-                    mode == SoundMode.OFF || mode != requestMode ->
-                        "지금 모드 ${mode.wire}, 요청할 때 모드 ${requestMode.wire}"
-                    seq < appliedSoundSeq -> "더 최근 요청(#$appliedSoundSeq)의 소리가 이미 정해짐(이 요청 #$seq)"
-                    !activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) -> "앱이 화면에 없음"
-                    else -> null
-                }
-                if (reason != null) {
-                    SoundLog.d("play_sound 무시: $reason")
-                    return@forEach
-                }
-                appliedSoundSeq = seq
-                if (player.canStart(action) && player.play(action)) willPlay = true
-            } else {
-                player.handle(action)
+        actions.forEach {
+            Log.d(AGENT_TAG, "action #$seq type=${it.type}, sound_id=${it.soundId}, title=${it.title}")
+        }
+        return soundActions.run(actions, seq) {
+            val mode = Session.soundMode
+            when {
+                mode == SoundMode.OFF || mode != requestMode ->
+                    "지금 모드 ${mode.wire}, 요청할 때 모드 ${requestMode.wire}"
+                !activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) -> "앱이 화면에 없음"
+                else -> null
             }
         }
-        return willPlay
     }
 
     /** 소리가 실제로 재생되기 시작하면 안전 안내를 한 것으로 기록한다(다운로드에 실패하면 다음에 다시 안내). */

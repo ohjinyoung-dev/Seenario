@@ -119,6 +119,8 @@ class SoundPlayer(
             current = track
             apply(track)
             log("재생 시작 id=$id, title=${action.title}, volume=$volume, loop=$loop")
+            // 이미 말하는 중에 시작하면 setDucking 로그가 없으므로 여기서 남긴다.
+            if (ducking) log("볼륨 낮춤(말하는 중에 재생 시작)")
             onStarted(id)
             track.job = scope.launch(start = CoroutineStart.UNDISPATCHED) { fadeIn(track) }
         }
