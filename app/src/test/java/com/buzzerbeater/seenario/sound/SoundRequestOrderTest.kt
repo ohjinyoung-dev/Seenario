@@ -1,6 +1,7 @@
 package com.buzzerbeater.seenario.sound
 
 import com.buzzerbeater.seenario.agent.AgentAction
+import com.buzzerbeater.seenario.agent.SoundMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -50,8 +51,8 @@ class SoundRequestOrderTest {
         val sound = order.next()
         val question = order.next()
         order.markDecided(question)
-        assertFalse(order.canPlay(sound))
-        assertTrue(order.canPlay(question))
+        assertFalse(order.canApply(sound))
+        assertTrue(order.canApply(question))
     }
 
     @Test
@@ -182,6 +183,74 @@ class SoundRequestOrderTest {
         player.setDucking(true)
         runner.run(listOf(play("debussy")), runner.nextRequest())
         assertTrue(logs.any { it.startsWith("볼륨 낮춤(말하는 중에 재생 시작)") })
+        player.release()
+    }
+    // --- 늦게 온 오래된 stop_sound ---
+
+    @Test
+    fun olderStopAfterNewerPlay_isIgnored() = runBlocking {
+        val (runner, player) = runner(this)
+        val question = runner.nextRequest() // 질문(에이전트가 나중에 stop_sound를 보냄)
+        val sound = runner.nextRequest() // 그 뒤 "배경음 켜"
+
+        assertTrue(runner.run(listOf(play("debussy")), sound))
+        // 먼저 보낸 질문의 stop_sound가 늦게 와도 더 최근 요청이 튼 곡을 멈추지 않는다.
+        runner.run(listOf(stop), question)
+
+        assertEquals("debussy", player.activeSoundId)
+        assertFalse(engines[0].stopped)
+        assertTrue(logs.any { it.startsWith("stop_sound 무시: 더 최근 요청(#2)") })
+        player.release()
+    }
+
+    @Test
+    fun olderStopAfterNewerStop_isIgnoredToo() = runBlocking {
+        val (runner, player) = runner(this)
+        val first = runner.nextRequest()
+        val second = runner.nextRequest()
+        runner.run(listOf(stop), second)
+        runner.run(listOf(stop), first)
+        assertTrue(logs.any { it.startsWith("stop_sound 무시") })
+        player.release()
+    }
+
+    // --- 사용자가 직접 말한 명령은 순서 규칙과 상관없이 바로 멈춤 ---
+
+    @Test
+    fun userDefaultMode_alwaysStops_evenWhenNewestRequestPlayed() = runBlocking {
+        val (runner, player) = runner(this)
+        val sound = runner.nextRequest()
+        runner.run(listOf(play("debussy")), sound)
+
+        // "소리 꺼" / "조용히 해줘" / "기본 모드로 가줘"는 모두 기본 모드(off) 전환이다.
+        runner.onUserSoundModeChanged(SoundMode.MUSIC, SoundMode.OFF)
+
+        assertNull(player.activeSoundId)
+        assertTrue(engines[0].stopped)
+        player.release()
+    }
+
+    @Test
+    fun userDefaultMode_stopsEvenAfterOlderStopWasIgnored() = runBlocking {
+        val (runner, player) = runner(this)
+        val question = runner.nextRequest()
+        val sound = runner.nextRequest()
+        runner.run(listOf(play("debussy")), sound)
+        runner.run(listOf(stop), question) // 무시됨
+        assertFalse(engines[0].stopped)
+
+        runner.onUserSoundModeChanged(SoundMode.MUSIC, SoundMode.OFF)
+
+        assertTrue(engines[0].stopped)
+        player.release()
+    }
+
+    @Test
+    fun userModeSwitch_ambientToMusic_alwaysStops() = runBlocking {
+        val (runner, player) = runner(this)
+        runner.run(listOf(play("waves")), runner.nextRequest())
+        runner.onUserSoundModeChanged(SoundMode.AMBIENT, SoundMode.MUSIC)
+        assertTrue(engines[0].stopped)
         player.release()
     }
 }

@@ -389,7 +389,8 @@ class SeenarioController(
         Session.soundModeChangedByUser = true
         Session.soundMode = mode
         // 기본 모드로 바뀌거나 환경음 ↔ 배경음으로 바뀌면 지금 소리를 페이드로 멈춘다.
-        player.onSoundModeChanged(old, mode)
+        // 사용자가 직접 말한 명령이므로 요청 순서 규칙과 상관없이 바로 적용한다.
+        soundActions.onUserSoundModeChanged(old, mode)
         // 처음 소리를 켤 때는 모드 안내 뒤에 안전 안내를 이어 읽는다(소리 요청의 응답은 읽지 않으므로).
         val turningOn = mode != SoundMode.OFF
         voice.speak(if (turningOn && !soundNoticeDone) "${soundModeNotice(mode)} $MSG_SOUND_SAFETY" else soundModeNotice(mode))
@@ -526,6 +527,7 @@ class SeenarioController(
      * 다음 경우에는 play_sound를 실행하지 않는다.
      * - 응답을 기다리는 동안 기본 모드나 다른 소리 모드로 바뀜, 앱이 화면에 없음 (여기서 판단)
      * - 더 나중에 보낸 요청의 소리 지시(play_sound/stop_sound)가 이미 실행됨 ([SoundActionRunner]가 판단)
+     * stop_sound도 더 나중에 보낸 요청의 소리 지시가 이미 실행됐으면 버린다.
      */
     private fun runSoundActions(actions: List<AgentAction>, requestMode: SoundMode, seq: Int): Boolean {
         actions.forEach {
