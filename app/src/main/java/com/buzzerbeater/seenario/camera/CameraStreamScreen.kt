@@ -54,6 +54,7 @@ private const val TAG = "SEENARIO"
  * 카메라 권한을 확인하고 후면 카메라 미리보기를 띄운다.
  * [trigger]로 요청이 오면 가장 최근 프레임을 [describer]로 보내 결과를 [onDescribed]로 알려준다.
  * 실패하면 [onError]를 부른다. 탭 처리와 결과 표시·낭독은 화면 조립 쪽(SeenarioScreen)에서 한다.
+ * [latestFrames]를 넘기면 가장 최근 프레임을 계속 채워 둬서, 밖에서 필요할 때 꺼내 쓸 수 있다.
  */
 @Composable
 fun CameraStreamScreen(
@@ -62,6 +63,7 @@ fun CameraStreamScreen(
     trigger: DescribeTrigger = remember { DescribeTrigger() },
     onDescribed: (String) -> Unit = {},
     onError: () -> Unit = {},
+    latestFrames: LatestFrameProvider? = null,
 ) {
     val context = LocalContext.current
     val activity = LocalActivity.current
@@ -101,7 +103,7 @@ fun CameraStreamScreen(
     }
 
     if (hasPermission) {
-        CameraStream(describer, trigger, onDescribed, onError, modifier)
+        CameraStream(describer, trigger, onDescribed, onError, latestFrames, modifier)
     } else {
         PermissionRequest(
             permanentlyDenied = permanentlyDenied,
@@ -128,6 +130,7 @@ private fun CameraStream(
     trigger: DescribeTrigger,
     onDescribed: (String) -> Unit,
     onError: () -> Unit,
+    latestFrames: LatestFrameProvider?,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
@@ -170,13 +173,18 @@ private fun CameraStream(
         onDispose {
             provider?.unbindAll()
             executor.shutdown()
+            // 카메라가 꺼졌으므로 밖에서 예전 사진을 꺼내 쓰지 않게 비운다.
+            latestFrames?.update(null)
         }
     }
 
     // 최신 프레임 1장만 메모리에 들고 있는다(저장하지 않음).
     var latestFrame by remember { mutableStateOf<CameraFrame?>(null) }
     LaunchedEffect(analyzer) {
-        analyzer.frames.collect { latestFrame = it }
+        analyzer.frames.collect {
+            latestFrame = it
+            latestFrames?.update(it)
+        }
     }
 
     var state by remember { mutableStateOf<DescribeState>(DescribeState.Idle) }
