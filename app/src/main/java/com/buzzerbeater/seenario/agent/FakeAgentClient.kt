@@ -13,7 +13,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * 서버(`seenario-agent`)가 생기기 전까지 쓰는 가짜 에이전트. [delayMs] 뒤에 예시 응답을 돌려준다.
- * 소리 모드가 켜져 있으면 play_sound action도 넣는다.
+ * 소리 모드가 켜져 있으면 play_sound action도 넣는다. input_type "sound"면 speech/display는 비우고 play_sound만 돌려준다.
  * - 디버그 빌드: `sounds` 테이블에서 같은 mode의 음원 하나를 골라 Storage signed URL(1시간)을 넣는다(배포 전 재생 테스트용).
  *   고르지 못하면 아래 예시 action으로 대신한다.
  * - 릴리스 빌드: url 없는 예시 action(재생되지 않는다).
@@ -36,6 +36,12 @@ class FakeAgentClient(
         val text = when (request.inputType) {
             InputType.DESCRIBE -> DESCRIBE_SAMPLE
             InputType.SPEECH -> "'${request.input}'라고 물어보셨네요. " + SPEECH_SAMPLE
+            // 소리만 고르는 요청: 묘사 문장 없이 같은 mode 음원의 play_sound만 돌려준다.
+            InputType.SOUND -> return AgentResponse(
+                speech = "",
+                display = "",
+                actions = soundAction(request.soundMode)?.let(::listOf).orEmpty(),
+            )
         }
         return AgentResponse(
             speech = text,
