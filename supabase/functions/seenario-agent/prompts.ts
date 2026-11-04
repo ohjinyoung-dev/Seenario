@@ -13,6 +13,12 @@ const SOUND_MODE_LABEL: Record<SoundModeOrOff, string> = {
 
 const TAG_GUIDE = SOUND_TAG_KEYS.map((k) => `${k}(${SOUND_TAGS[k]})`).join(", ");
 
+/** 소리를 고르기 위해 사진에서 뽑을 값(tags, existing_sounds) 설명. describe와 sound가 같이 쓴다. */
+const SOUND_FIELDS_GUIDE =
+  `- tags: 분위기 태그 3~${MAX_TAGS}개. 반드시 아래 목록의 영문 단어 중에서만. 장소, 날씨, 계절, 시간대, 분위기 중 사진에서 알 수 있는 것만 골라.
+  목록: ${TAG_GUIDE}
+- existing_sounds: 이 장소에서 지금 실제로 들릴 것 같은 소리 종류. 사진으로 짐작할 수 있는 것만, 없으면 빈 배열.`;
+
 /** 모든 요청에 공통으로 붙는 역할과 말투. */
 export function systemPrompt(soundMode: SoundModeOrOff, hasImage: boolean): string {
   const lines = [
@@ -46,9 +52,14 @@ export function describeInstruction(soundOn: boolean): string {
   return base + `
 
 추가로, 이 장면에 어울리는 소리를 고르기 위한 값도 골라 줘.
-- tags: 분위기 태그 3~${MAX_TAGS}개. 반드시 아래 목록의 영문 단어 중에서만. 장소, 날씨, 계절, 시간대, 분위기 중 사진에서 알 수 있는 것만 골라.
-  목록: ${TAG_GUIDE}
-- existing_sounds: 이 장소에서 지금 실제로 들릴 것 같은 소리 종류. 사진으로 짐작할 수 있는 것만, 없으면 빈 배열.`;
+${SOUND_FIELDS_GUIDE}`;
+}
+
+/** sound: 묘사 문장 없이 소리를 고르기 위한 값만 뽑는다. */
+export function soundInstruction(): string {
+  return `너는 시각장애인을 위한 앱 '씨나리오'에서 지금 공간에 어울리는 소리를 고르는 역할이야.
+사진을 보고 소리를 고르기 위한 값만 골라 줘. 묘사 문장은 쓰지 마.
+${SOUND_FIELDS_GUIDE}`;
 }
 
 /** speech: 사용자 말에 답할 때 추가 지시. */

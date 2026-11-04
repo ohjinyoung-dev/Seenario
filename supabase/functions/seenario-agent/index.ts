@@ -2,13 +2,15 @@
 // - AI는 Gemini만 쓴다. API 키는 Edge Function secret(GEMINI_API_KEY)에만 둔다.
 // - describe("묘사해줘"): 반복 없이 사진 → Gemini 1번 → 묘사. 사진이 없으면 400(앱이 describe-scene으로 대신 묘사).
 // - speech(그 밖의 말): 생각 → 도구 사용 → 판단을 최대 3번 반복한 뒤 답한다.
-// - 소리 고르기는 팀장님 tools/sound.ts가 오기 전까지 임시로 고른 곡을 로그로만 남긴다(play_sound 없음).
+// - sound(소리 모드를 켤 때): 묘사 없이 사진 → Gemini 1번 → 곡 고르기. speech/display는 빈 문자열.
+// - 곡 고르기는 tools/sound.ts를 쓰고, 고른 곡은 actions의 play_sound로 보낸다.
 // - 사진은 요청 처리에만 쓰고 저장하지 않는다. 로그에도 사진과 사용자 말 전문은 남기지 않는다.
 // - 로그인한(익명 포함) 사용자만 호출할 수 있다.
 
 import { GEMINI_API_KEY } from "../_shared/gemini.ts";
 import { isSignedIn, json, userClient } from "../_shared/http.ts";
 import { describe } from "./describe.ts";
+import { soundOnly } from "./sound_request.ts";
 import { converse } from "./speech.ts";
 import { type AgentContext, AgentError, type AgentRequest, type HistoryItem, type SoundModeOrOff } from "./types.ts";
 
@@ -24,12 +26,15 @@ const SOUND_MODES = new Set<string>(["off", "ambient", "music"]);
 function parseRequest(body: any): AgentRequest {
   if (typeof body !== "object" || body === null) throw new AgentError(400, "invalid_json");
 
-  const input = typeof body.input === "string" ? body.input.trim() : "";
-  if (!input) throw new AgentError(400, "input_required");
-  if (input.length > MAX_INPUT_LENGTH) throw new AgentError(400, "input_too_long");
-
   const inputType = body.input_type;
-  if (inputType !== "speech" && inputType !== "describe") throw new AgentError(400, "invalid_input_type");
+  if (inputType !== "speech" && inputType !== "describe" && inputType !== "sound") {
+    throw new AgentError(400, "invalid_input_type");
+  }
+
+  const input = typeof body.input === "string" ? body.input.trim() : "";
+  // sound는 사용자 말이 없는 요청이라 빈 input을 허용한다.
+  if (!input && inputType !== "sound") throw new AgentError(400, "input_required");
+  if (input.length > MAX_INPUT_LENGTH) throw new AgentError(400, "input_too_long");
 
   let image: string | undefined;
   if (body.image != null) {
@@ -45,6 +50,8 @@ function parseRequest(body: any): AgentRequest {
 
   // 모르는 값이나 빈 값이면 기본 모드(off)로 본다.
   const soundMode: SoundModeOrOff = SOUND_MODES.has(body.sound_mode) ? body.sound_mode : "off";
+  // sound는 소리 모드(ambient/music) 안에서만 곡을 고른다.
+  if (inputType === "sound" && soundMode === "off") throw new AgentError(400, "sound_mode_off");
 
   return { input, input_type: inputType, image, history, sound_mode: soundMode };
 }
@@ -73,7 +80,11 @@ Deno.serve(async (req) => {
         `image=${request.image ? "yes" : "no"} history=${request.history.length}`,
     );
     const ctx: AgentContext = { supabase: client.supabase, request, deadlineAt: started + TOTAL_DEADLINE_MS };
-    const response = request.input_type === "describe" ? await describe(ctx) : await converse(ctx);
+    const response = request.input_type === "describe"
+      ? await describe(ctx)
+      : request.input_type === "sound"
+      ? await soundOnly(ctx)
+      : await converse(ctx);
     console.log(`agent ok in ${Date.now() - started}ms actions=${JSON.stringify(response.actions.map((a) => a.type))}`);
     return json(response);
   } catch (e) {

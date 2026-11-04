@@ -2,7 +2,7 @@
 
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
-export type InputType = "speech" | "describe";
+export type InputType = "speech" | "describe" | "sound";
 export type SoundModeOrOff = "off" | "ambient" | "music";
 export type HistoryItem = { role: "user" | "agent"; text: string };
 
