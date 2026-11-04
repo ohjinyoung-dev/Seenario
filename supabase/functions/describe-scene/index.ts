@@ -5,11 +5,12 @@
 // - 사용자의 sound_mode가 ambient(환경음)/music(배경음악)이면 분위기 태그도 함께 받아
 //   sounds 테이블에서 가장 잘 맞는 음원을 골라 재생 URL을 같이 돌려준다. off(기본)면 묘사만 돌려준다.
 
-import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { normalizeTags, SOUND_TAG_KEYS, SOUND_TAGS, type SoundTag } from "./sound_tags.ts";
+import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
+import { callGemini, extractText, GEMINI_API_KEY, parseJsonText } from "../_shared/gemini.ts";
+import { isSignedIn, json, userClient } from "../_shared/http.ts";
+import { pickSound, SOUND_MODES, type SoundMode } from "../_shared/sound_pick.ts";
+import { normalizeTags, SOUND_TAG_KEYS, SOUND_TAGS, type SoundTag } from "../_shared/sound_tags.ts";
 
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-flash-latest";
 const MAX_IMAGE_BASE64_LENGTH = 2_000_000; // 약 1.5MB JPEG
 
 const PROMPT = `너는 시각장애인을 위해 지금 눈앞의 풍경을 들려주는 라디오 진행자야.
@@ -22,10 +23,6 @@ const PROMPT = `너는 시각장애인을 위해 지금 눈앞의 풍경을 들�
 - 사진이 너무 어둡거나 흐려서 알아보기 어렵다면 솔직하게 그렇다고 말해.
 - 목록, 기호, 이모지 없이 문장만 출력해.`;
 
-type SoundMode = "ambient" | "music";
-const SOUND_MODES = new Set<string>(["ambient", "music"]);
-const SOUND_BUCKET = "sounds";
-const SOUND_URL_EXPIRES_SEC = 60 * 60; // 재생 URL 유효 시간(1시간)
 const MAX_TAGS = 6;
 
 const TAG_GUIDE = SOUND_TAG_KEYS.map((k) => `${k}(${SOUND_TAGS[k]})`).join(", ");
@@ -48,105 +45,6 @@ const TAG_RESPONSE_SCHEMA = {
   required: ["description", "tags"],
 };
 
-// 모델 후보. 앞 모델이 [HEDGE_DELAY_MS] 안에 답하지 않으면 기존 요청은 둔 채 다음 모델을 함께 출발시키고,
-// 가장 먼저 성공한 응답을 쓴다(나머지는 취소). 앞 모델이 오류로 끝나면 즉시 다음 모델을 출발시킨다.
-// 계열(최신 별칭 vs 고정 버전, Flash vs Flash-Lite)을 섞어 동시에 막힐 가능성을 줄였다.
-const FALLBACK_MODELS = (
-  Deno.env.get("GEMINI_FALLBACK_MODELS") ??
-    "gemini-3.6-flash,gemini-flash-lite-latest,gemini-3.5-flash-lite"
-)
-  .split(",")
-  .map((m) => m.trim())
-  .filter(Boolean);
-// 이 상태 코드면 다음 모델로 넘어간다. 그 외(401/403 키 문제)는 전체 즉시 실패.
-// 400은 모델마다 지원 옵션(thinking 수준 등)이 달라서 날 수 있으므로 다음 모델로 넘긴다.
-const NEXT_MODEL_STATUS = new Set([400, 404, 429, 500, 503, 504]);
-const HEDGE_DELAY_MS = 5_000; // 이 시간 안에 답이 없으면 다음 모델을 함께 출발
-const ATTEMPT_TIMEOUT_MS = 20_000; // 모델 하나의 최대 대기 시간
-const TOTAL_DEADLINE_MS = 34_000; // 앱의 요청 제한(40초)보다 짧게
-
-type Attempt = { model: string; status: number | "timeout" | "aborted"; ms: number };
-type GeminiResult = { model: string; data: any | null; attempts: Attempt[] };
-type TryResult = { data: any | null; fatal: boolean; attempt: Attempt };
-
-async function tryModel(model: string, body: string, signal: AbortSignal): Promise<TryResult> {
-  const started = Date.now();
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY! },
-        body,
-        signal,
-      },
-    );
-    const attempt: Attempt = { model, status: res.status, ms: Date.now() - started };
-    if (res.ok) return { data: await res.json(), fatal: false, attempt };
-    const detail = (await res.text()).slice(0, 300);
-    console.error("Gemini error", model, res.status, `${attempt.ms}ms`, detail);
-    return { data: null, fatal: !NEXT_MODEL_STATUS.has(res.status), attempt };
-  } catch (e) {
-    const status = signal.reason?.name === "TimeoutError" ? "timeout" : "aborted";
-    return { data: null, fatal: false, attempt: { model, status, ms: Date.now() - started } };
-  }
-}
-
-/** 모델 후보를 시간차로 출발시켜 가장 먼저 성공한 응답을 돌려준다. 모두 실패하면 data가 null. */
-function callGemini(body: string): Promise<GeminiResult> {
-  const models = [GEMINI_MODEL, ...FALLBACK_MODELS.filter((m) => m !== GEMINI_MODEL)];
-  const attempts: Attempt[] = [];
-  const controllers: AbortController[] = [];
-  const deadline = AbortSignal.timeout(TOTAL_DEADLINE_MS);
-
-  return new Promise((resolve) => {
-    let next = 0;
-    let running = 0;
-    let done = false;
-    let hedgeTimer: number | undefined;
-
-    const finish = (result: GeminiResult) => {
-      if (done) return;
-      done = true;
-      clearTimeout(hedgeTimer);
-      controllers.forEach((c) => c.abort());
-      console.log("Gemini attempts", JSON.stringify(result.attempts));
-      resolve(result);
-    };
-    const fail = () => finish({ model: "", data: null, attempts });
-
-    const launch = () => {
-      if (done) return;
-      clearTimeout(hedgeTimer);
-      if (next >= models.length) {
-        if (running === 0) fail();
-        return;
-      }
-      const model = models[next++];
-      const controller = new AbortController();
-      controllers.push(controller);
-      running++;
-      hedgeTimer = setTimeout(launch, HEDGE_DELAY_MS);
-
-      const signal = AbortSignal.any([controller.signal, deadline, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]);
-      tryModel(model, body, signal).then((r) => {
-        running--;
-        if (done) return;
-        attempts.push(r.attempt);
-        if (r.data) finish({ model, data: r.data, attempts });
-        else if (r.fatal) fail();
-        else launch(); // 오류로 끝났으면 기다리지 말고 다음 모델을 바로 출발
-      });
-    };
-
-    deadline.addEventListener("abort", fail);
-    launch();
-  });
-}
-
-type SoundRow = { id: string; title: string; mode: SoundMode; file_path: string; loopable: boolean; tags: string[] };
-type PickedSound = { id: string; title: string; mode: SoundMode; url: string; loopable: boolean; tags: string[] };
-
 /** 사용자 설정의 sound_mode. 행이 없거나 읽기에 실패하면 기본값(off)으로 본다. */
 async function loadSoundMode(supabase: SupabaseClient): Promise<SoundMode | null> {
   const { data, error } = await supabase.from("user_settings").select("sound_mode").maybeSingle();
@@ -158,71 +56,22 @@ async function loadSoundMode(supabase: SupabaseClient): Promise<SoundMode | null
   return typeof mode === "string" && SOUND_MODES.has(mode) ? (mode as SoundMode) : null;
 }
 
-/**
- * 모드가 같은 음원 중 태그가 가장 많이 겹치는 것을 고른다(동점이면 무작위).
- * 하나도 겹치지 않으면 엉뚱한 소리가 나지 않도록 고르지 않는다.
- */
-async function pickSound(supabase: SupabaseClient, mode: SoundMode, tags: SoundTag[]): Promise<PickedSound | null> {
-  if (tags.length === 0) return null;
-  const { data, error } = await supabase
-    .from("sounds")
-    .select("id, title, mode, file_path, loopable, tags")
-    .eq("mode", mode)
-    .overlaps("tags", tags);
-  if (error) {
-    console.error("sounds read failed", error.message);
-    return null;
-  }
-  const rows = (data ?? []) as SoundRow[];
-  if (rows.length === 0) return null;
-
-  const wanted = new Set<string>(tags);
-  const scored = rows.map((r) => ({ r, score: r.tags.filter((t) => wanted.has(t)).length }));
-  const best = Math.max(...scored.map((s) => s.score));
-  const top = scored.filter((s) => s.score === best);
-  const chosen = top[Math.floor(Math.random() * top.length)].r;
-
-  const { data: signed, error: urlError } = await supabase.storage
-    .from(SOUND_BUCKET)
-    .createSignedUrl(chosen.file_path, SOUND_URL_EXPIRES_SEC);
-  if (urlError || !signed?.signedUrl) {
-    console.error("sound signed url failed", chosen.file_path, urlError?.message);
-    return null;
-  }
-  return {
-    id: chosen.id,
-    title: chosen.title,
-    mode: chosen.mode,
-    url: signed.signedUrl,
-    loopable: chosen.loopable,
-    tags: chosen.tags,
-  };
-}
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+const TOTAL_DEADLINE_MS = 34_000; // 앱의 요청 제한(40초)보다 짧게
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!GEMINI_API_KEY) return json({ error: "server_not_configured" }, 500);
 
   // 호출자 확인 (익명 로그인 사용자도 허용)
-  const token = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-  if (!token) return json({ error: "unauthorized" }, 401);
   // 사용자 토큰을 실어 보내 RLS가 이 사용자 기준으로 적용되게 한다.
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    { global: { headers: { Authorization: `Bearer ${token}` } } },
-  );
-  const [{ data: userData, error: authError }, soundMode] = await Promise.all([
-    supabase.auth.getUser(token),
+  const client = userClient(req);
+  if (!client) return json({ error: "unauthorized" }, 401);
+  const { supabase, token } = client;
+  const [signedIn, soundMode] = await Promise.all([
+    isSignedIn(supabase, token),
     loadSoundMode(supabase),
   ]);
-  if (authError || !userData.user) return json({ error: "unauthorized" }, 401);
+  if (!signedIn) return json({ error: "unauthorized" }, 401);
 
   let image: unknown;
   let mimeType: unknown;
@@ -254,24 +103,21 @@ Deno.serve(async (req) => {
     },
   });
 
-  const result = await callGemini(requestBody);
+  const result = await callGemini(requestBody, { deadlineMs: TOTAL_DEADLINE_MS });
   // 실패 시 모델별 상태 코드만 돌려준다(진단용, 민감 정보 없음).
   if (!result.data) return json({ error: "gemini_failed", attempts: result.attempts }, 502);
 
-  const text = (result.data?.candidates?.[0]?.content?.parts ?? [])
-    .map((p: { text?: string; thought?: boolean }) => (p.thought ? "" : p.text ?? ""))
-    .join("")
-    .trim();
+  const text = extractText(result.data);
 
   let description = text;
   let tags: SoundTag[] = [];
   if (soundMode) {
-    try {
-      // 일부 모델이 ```json 코드 블록으로 감싸 보내는 경우를 대비한다.
-      const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    // 일부 모델이 ```json 코드 블록으로 감싸 보내는 경우를 parseJsonText가 처리한다.
+    const parsed = parseJsonText(text);
+    if (parsed) {
       description = typeof parsed?.description === "string" ? parsed.description.trim() : "";
       tags = normalizeTags(parsed?.tags).slice(0, MAX_TAGS);
-    } catch {
+    } else {
       // JSON이 아니면 문장 그대로를 묘사로 쓰고 음원은 고르지 않는다.
       console.error("Gemini tag response not JSON", result.model, text.slice(0, 200));
     }
