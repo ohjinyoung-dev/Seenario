@@ -13,7 +13,8 @@ import io.ktor.http.contentType
 
 /**
  * Edge Function `seenario-agent`를 부른다. AI 호출과 API 키는 모두 서버에만 있다.
- * (서버는 아직 없다. 지금 부르면 실패하고, 부르는 쪽이 대신할 동작을 맡는다.)
+ * 서버가 에러(예: describe에 사진이 없을 때 400 image_required)를 돌려주면 예외가 나고,
+ * 부르는 쪽이 대신할 동작(describe-scene 대신 묘사, 실패 안내)을 맡는다.
  */
 class SupabaseAgentClient(
     private val supabase: SupabaseClient,
