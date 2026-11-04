@@ -1,16 +1,19 @@
 // 에이전트의 소리 도구(pick_sound, stop_sound).
-// - 곡 고르기는 팀장님이 만드는 tools/sound.ts가 오기 전까지 **임시로** _shared/sound_pick.ts를 쓰고,
-//   고른 곡은 로그로만 남긴다(응답 actions에 play_sound를 넣지 않음).
-//   sound.ts가 오면 logPick()의 pickSound 호출을 그걸로 바꾸고 play_sound action을 붙인다.
+// - 곡 고르기는 tools/sound.ts(contains 제외, 비율 점수)를 쓴다.
+// - 고른 곡이 있으면 응답 actions에 play_sound를 붙인다. url은 로그에 남기지 않는다.
 
-import { pickSound, type SoundMode } from "../_shared/sound_pick.ts";
+import type { SoundMode } from "../_shared/sound_pick.ts";
 import { normalizeTags, SOUND_TAG_KEYS } from "../_shared/sound_tags.ts";
 import { MAX_TAGS } from "./prompts.ts";
+import { pickSound as pickAgentSound, type SoundPick } from "./tools/sound.ts";
 import { type AgentAction, type AgentContext, EXISTING_SOUNDS, normalizeExistingSounds } from "./types.ts";
 
-export type PickLog = { found: boolean; title?: string };
+/** play_sound의 기본 음량(0~1). 묘사 낭독을 가리지 않도록 작게. */
+export const PLAY_VOLUME = 0.4;
 
-/** 임시: 곡을 골라 로그만 남긴다. url은 로그에도 남기지 않는다. */
+export type PickLog = { found: boolean; title?: string; sound?: SoundPick };
+
+/** 곡을 고르고 로그를 남긴다. url은 로그에 남기지 않는다. */
 export async function logPick(
   ctx: AgentContext,
   mode: SoundMode,
@@ -20,12 +23,24 @@ export async function logPick(
 ): Promise<PickLog> {
   const tags = normalizeTags(rawTags).slice(0, MAX_TAGS);
   const existing = normalizeExistingSounds(rawExisting);
-  const picked = await pickSound(ctx.supabase, mode, tags);
+  const picked = await pickAgentSound(ctx.supabase, { mode, tags, existing_sounds: existing });
   console.log(
-    `sound pick (임시, 재생 안 함) from=${from} mode=${mode} tags=${JSON.stringify(tags)} existing=${JSON.stringify(existing)}`,
-    picked ? `→ ${picked.id} "${picked.title}"` : "→ none",
+    `sound pick from=${from} mode=${mode} tags=${JSON.stringify(tags)} existing=${JSON.stringify(existing)}`,
+    picked ? `→ ${picked.sound_id} "${picked.title}"` : "→ none",
   );
-  return picked ? { found: true, title: picked.title } : { found: false };
+  return picked ? { found: true, title: picked.title, sound: picked } : { found: false };
+}
+
+/** 고른 곡으로 play_sound action을 만든다. */
+export function playAction(sound: SoundPick): AgentAction {
+  return {
+    type: "play_sound",
+    sound_id: sound.sound_id,
+    title: sound.title,
+    url: sound.url,
+    volume: PLAY_VOLUME,
+    loopable: sound.loopable,
+  };
 }
 
 /** 소리 모드가 켜져 있을 때 Gemini에 주는 도구 선언. */
@@ -67,9 +82,12 @@ export async function runSoundTool(
   switch (name) {
     case "pick_sound": {
       const pick = await logPick(ctx, mode, args.tags, args.existing_sounds, "speech");
-      return pick.found
-        ? { found: true, title: pick.title, playing: false, note: "아직 재생 기능이 없어 실제로 틀지는 않음" }
-        : { found: false, playing: false, note: "어울리는 곡을 찾지 못함" };
+      if (!pick.sound) return { found: false, playing: false, note: "어울리는 곡을 찾지 못함" };
+      // 한 번에 곡 하나만 틀도록, 이번 응답에서 먼저 고른 곡이 있으면 새 곡으로 바꾼다.
+      const kept = actions.filter((a) => a.type !== "play_sound");
+      actions.length = 0;
+      actions.push(...kept, playAction(pick.sound));
+      return { found: true, title: pick.title, playing: true };
     }
     case "stop_sound":
       if (!actions.some((a) => a.type === "stop_sound")) actions.push({ type: "stop_sound" });

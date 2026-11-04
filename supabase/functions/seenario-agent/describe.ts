@@ -1,11 +1,11 @@
-// describe: 반복 없이 고정 순서로 처리한다. 사진 → Gemini 1번 → 묘사(+소리 모드면 태그로 곡 고르기, 지금은 로그만).
+// describe: 반복 없이 고정 순서로 처리한다. 사진 → Gemini 1번 → 묘사(+소리 모드면 태그로 곡 고르기 → play_sound).
 
 import { callGemini, extractText, parseJsonText } from "../_shared/gemini.ts";
 import type { SoundMode } from "../_shared/sound_pick.ts";
 import { SOUND_TAG_KEYS } from "../_shared/sound_tags.ts";
 import { describeInstruction, systemPrompt } from "./prompts.ts";
-import { logPick } from "./sound_tools.ts";
-import { type AgentContext, AgentError, type AgentResponse, EXISTING_SOUNDS, remainingMs } from "./types.ts";
+import { logPick, playAction } from "./sound_tools.ts";
+import { type AgentAction, type AgentContext, AgentError, type AgentResponse, EXISTING_SOUNDS, remainingMs } from "./types.ts";
 
 const SPEECH_ONLY_SCHEMA = {
   type: "OBJECT",
@@ -59,8 +59,10 @@ export async function describe(ctx: AgentContext): Promise<AgentResponse> {
   }
   console.log(`describe ok model=${result.model}`);
 
+  const actions: AgentAction[] = [];
   if (soundOn) {
-    await logPick(ctx, request.sound_mode as SoundMode, parsed?.tags, parsed?.existing_sounds, "describe");
+    const pick = await logPick(ctx, request.sound_mode as SoundMode, parsed?.tags, parsed?.existing_sounds, "describe");
+    if (pick.sound) actions.push(playAction(pick.sound));
   }
-  return { speech, display: speech, actions: [] };
+  return { speech, display: speech, actions };
 }
