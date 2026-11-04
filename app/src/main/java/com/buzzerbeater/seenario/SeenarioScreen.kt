@@ -13,6 +13,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.Settings
+import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -75,6 +76,7 @@ import com.buzzerbeater.seenario.agent.InputType
 import com.buzzerbeater.seenario.agent.SoundMode
 import com.buzzerbeater.seenario.camera.CameraStreamScreen
 import com.buzzerbeater.seenario.camera.DescribeTrigger
+import com.buzzerbeater.seenario.camera.LatestFrameProvider
 import com.buzzerbeater.seenario.camera.SceneDescriber
 import com.buzzerbeater.seenario.data.SupabaseProvider
 import com.buzzerbeater.seenario.data.UserSettings
@@ -161,6 +163,9 @@ class SeenarioController(
     )
     val trigger = DescribeTrigger()
     val describer = SceneDescriber(SupabaseProvider.client)
+
+    /** 카메라 화면이 채우는 최신 프레임. 에이전트 요청에 사진으로 넣는다. */
+    val frames = LatestFrameProvider()
     private val agent = AgentClient.create(SupabaseProvider.client)
     private val soundModeStore = SoundModeStore(SupabaseProvider.client)
 
@@ -354,18 +359,23 @@ class SeenarioController(
             show(TEXT_THINKING, speech = MSG_THINKING)
         }
         thinking = true
+        // 최신 카메라 사진(긴 변 768px JPEG). 카메라 준비 전이거나 권한이 없으면 null이라 사진 없이 보낸다.
+        // describe에 사진이 없으면 서버가 400 image_required를 주고, 아래에서 describe-scene으로 대신 묘사한다.
+        val jpeg = frames.latest()?.jpeg
         val request = AgentRequest(
             input = input,
             inputType = type,
-            // camera/에서 최신 프레임을 받을 방법이 생기면 base64 JPEG를 넣는다.
-            image = null,
+            image = jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
             history = Session.history.snapshot(),
             soundMode = Session.soundMode,
         )
         if (BuildConfig.DEBUG) {
+            // 사진은 포함 여부와 크기만 남긴다.
+            val image = if (jpeg != null) "yes(${(jpeg.size + 1023) / 1024}KB)" else "no"
             Log.d(
                 AGENT_TAG,
-                "request input_type=${type.wire}, sound_mode=${request.soundMode.wire}, history=${request.history.size}",
+                "request input_type=${type.wire}, sound_mode=${request.soundMode.wire}, " +
+                    "history=${request.history.size}, image=$image",
             )
         }
         // 에이전트와 대신 묘사를 합쳐 전체 대기 시간이 AGENT_TIMEOUT_MS를 넘지 않게 한다.
@@ -606,6 +616,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
                 trigger = controller.trigger,
                 onDescribed = controller::onDescribed,
                 onError = controller::onDescribeFailed,
+                latestFrames = controller.frames,
                 modifier = Modifier.fillMaxSize(),
             )
         }

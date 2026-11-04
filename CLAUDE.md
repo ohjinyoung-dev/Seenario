@@ -28,7 +28,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - 앱을 켜면 항상 기본 모드로 시작하고 DB `sound_mode`도 `off`로 저장한다(지난 모드에는 기록하지 않음). 지난 모드가 `ambient`/`music`이면 시작 안내 끝에 "지난번에는 환경음 모드를 쓰셨어요. '환경음 켜'라고 말하면 다시 켜져요."(배경음이면 배경음)를 붙인다. 음성 인식을 못 쓰는 기기에는 붙이지 않는다.
 5. 휴대폰 명령이 아니면 에이전트(`agent/`)로 보낸다. "묘사해줘"는 `describe`, 나머지 말은 `speech`. 최근 대화 6개(메시지 기준)와 현재 `sound_mode`를 같이 보낸다.
    - TTS "잠시만요, 주변을 살펴볼게요."(describe) 또는 "잠시만요, 생각해 볼게요."(speech) + 상태 "생각하는 중".
-   - 지금은 `BuildConfig.USE_FAKE_AGENT`(기본 true)라서 2초 뒤 가짜 응답이 온다. 최신 카메라 사진은 camera/에 가져오는 함수가 생길 때까지 보내지 않는다.
+   - 지금은 `BuildConfig.USE_FAKE_AGENT`(기본 true)라서 2초 뒤 가짜 응답이 온다.
+   - 최신 카메라 사진을 `LatestFrameProvider`에서 꺼내 `image`(base64 JPEG, 긴 변 768px)로 같이 보낸다. 카메라 준비 전이거나 권한이 없으면 `image` 없이 보낸다. describe에 사진이 없으면 서버가 400 `image_required`를 돌려주고, 앱은 아래 대신 묘사로 넘어간다.
+   - 디버그 빌드에서는 Logcat `SEENARIO_AGENT`에 사진 포함 여부와 크기(KB)만 남긴다.
 6. 응답의 `speech`는 TTS로 낭독(상태 "말하는 중"), `display`는 화면 아래쪽에 큰 글씨로 표시 → 끝나면 "대기 중". `actions`는 소리 재생기가 생길 때까지 Logcat `SEENARIO_AGENT`에만 남긴다.
    - 처리 중 다시 요청: "지금 살펴보는 중이에요" 안내 후 무시.
    - 실패: "주변을 살펴보지 못했어요. 다시 시도해 주세요." 안내. 전체 대기 시간은 20초를 넘지 않는다.
