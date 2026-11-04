@@ -88,7 +88,7 @@ Deno.serve(async (req) => {
   }
   const mime = mimeType === "image/png" ? "image/png" : "image/jpeg";
 
-  const requestBody = JSON.stringify({
+  const requestBody = {
     contents: [{
       role: "user",
       parts: [
@@ -101,7 +101,7 @@ Deno.serve(async (req) => {
       thinkingConfig: { thinkingLevel: "minimal" },
       ...(soundMode ? { responseMimeType: "application/json", responseSchema: TAG_RESPONSE_SCHEMA } : {}),
     },
-  });
+  };
 
   const result = await callGemini(requestBody, { deadlineMs: TOTAL_DEADLINE_MS });
   // 실패 시 모델별 상태 코드만 돌려준다(진단용, 민감 정보 없음).

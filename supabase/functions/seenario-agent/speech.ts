@@ -36,7 +36,7 @@ export async function converse(ctx: AgentContext): Promise<AgentResponse> {
     if (left < MIN_ROUND_MS) throw new AgentError(504, "timeout");
     const last = round === MAX_ROUNDS;
 
-    const body = JSON.stringify({
+    const body = {
       systemInstruction: { parts: [{ text: system }] },
       contents,
       ...(soundOn
@@ -47,7 +47,7 @@ export async function converse(ctx: AgentContext): Promise<AgentResponse> {
         }
         : {}),
       generationConfig: { thinkingConfig: { thinkingLevel: "minimal" } },
-    });
+    };
 
     const started = Date.now();
     const result = await callGemini(body, { deadlineMs: left, preferModel });

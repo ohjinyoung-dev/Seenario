@@ -29,7 +29,7 @@ export async function describe(ctx: AgentContext): Promise<AgentResponse> {
   if (!request.image) throw new AgentError(400, "image_required");
   const soundOn = request.sound_mode !== "off";
 
-  const body = JSON.stringify({
+  const body = {
     systemInstruction: { parts: [{ text: systemPrompt(request.sound_mode, true) }] },
     contents: [{
       role: "user",
@@ -44,7 +44,7 @@ export async function describe(ctx: AgentContext): Promise<AgentResponse> {
       responseMimeType: "application/json",
       responseSchema: soundOn ? WITH_SOUND_SCHEMA : SPEECH_ONLY_SCHEMA,
     },
-  });
+  };
 
   const result = await callGemini(body, { deadlineMs: remainingMs(ctx) });
   if (!result.data) throw new AgentError(502, "gemini_failed");
