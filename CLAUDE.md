@@ -100,7 +100,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 ```json
 {
   "input": "string",
-  "input_type": "speech | describe",
+  "input_type": "speech | describe | sound",
   "image": "base64 JPEG",
   "history": [{ "role": "user | agent", "text": "string" }],
   "sound_mode": "off | ambient | music"
