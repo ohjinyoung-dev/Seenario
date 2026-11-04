@@ -89,7 +89,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 - 기본 모드(묘사)와 대화 모드를 하나로 합친다. 앱은 사용자 입력과 최신 카메라 사진을 Edge Function `seenario-agent`로 보낸다. 에이전트는 생각 → 도구 사용 → 판단을 최대 3번 반복한 뒤 답한다.
 - 사진 촬영과 소리 재생은 앱이 맡는다. 서버는 응답의 `actions`로 무엇을 할지 지시만 한다.
-- `seenario-agent`(서버 15초 제한)는 지금 **Gemini만** 쓴다. describe는 반복 없이 사진 → Gemini 1번 → 묘사이고, 사진이 없으면 400 `image_required`라서 앱이 `describe-scene`으로 대신 묘사한다. speech는 Gemini 함수 호출로 최대 3번 반복하며, 소리 모드가 켜져 있으면 `pick_sound`/`stop_sound` 도구를 준다. `tools/sound.ts`가 오기 전까지는 `_shared/sound_pick.ts`로 고른 곡을 **로그로만** 남기고 `play_sound`는 보내지 않는다(`stop_sound`만 보냄).
+- `seenario-agent`(서버 15초 제한)는 지금 **Gemini만** 쓴다. describe는 반복 없이 사진 → Gemini 1번 → 묘사이고, 사진이 없으면 400 `image_required`라서 앱이 `describe-scene`으로 대신 묘사한다. speech는 Gemini 함수 호출로 최대 3번 반복하며, 소리 모드가 켜져 있으면 `pick_sound`/`stop_sound` 도구를 준다. sound(`sound_request.ts`)는 반복 없이 사진 → Gemini 1번(`tags`, `existing_sounds`만) → 곡 고르기이고, `speech`/`display`는 빈 문자열이다. `sound_mode`가 `off`면 400 `sound_mode_off`, 사진이 없으면 400 `image_required`. 곡 고르기는 describe·speech·sound 모두 `tools/sound.ts`를 쓰고, 고른 곡은 `actions`의 `play_sound`(volume 0.4)로 보낸다.
 - Edge Function 공용 코드는 `supabase/functions/_shared/`에 있다: `gemini.ts`(모델 시간차 호출. 후보 순서는 secret `GEMINI_MODELS`로 바꿀 수 있고, 없으면 무료 한도가 넉넉한 Flash Lite부터 부른다. 429가 난 모델은 대기 시간 동안 건너뛰고, 생각 단계를 지원하지 않는 모델은 낮춰서 다시 보낸다), `http.ts`(응답, 사용자 확인), `sound_pick.ts`(describe-scene의 음원 선택), `sound_tags.ts`.
 - 기존 `describe-scene`은 대신 묘사용으로 남긴다. 현재 `describe-scene`은 `{ description, model }`을 돌려준다. `user_settings.sound_mode`가 `ambient`/`music`이면 `soundMode`, `tags`(`SOUND_TAGS` 값), `sound`도 함께 돌려준다. `sound`는 `{ id, title, mode, url(1시간 signed URL), loopable, tags }` 형태이고, 고르지 못하면 `null`이다. 앱(`SceneDescriber`)은 아직 이 값들을 로그로만 남긴다.
 
@@ -137,7 +137,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 ### 소리 고르기 도구 (`tools/sound.ts`, 앱 담당)
 
-- 지금 `describe-scene` 안에 있는 음원 선택 로직(`pickSound`)을 에이전트 단계에서 `supabase/functions/seenario-agent/tools/sound.ts`로 옮긴다. 이 로직은 `SOUND_TAGS` 기반으로 같은 mode의 음원 중 태그가 가장 많이 겹치는 것을 고르고, 동점이면 무작위로 고르며, 하나도 겹치지 않으면 고르지 않는다.
+- 지금 `describe-scene` 안에 있는 음원 선택 로직(`pickSound`)을 에이전트 단계에서 `supabase/functions/seenario-agent/tools/sound.ts`로 옮긴다. 이 로직은 `SOUND_TAGS` 기반으로 같은 mode의 음원 중 겹친 태그 비율(겹친 태그 수 ÷ 그 음원의 태그 수)이 가장 높은 것을 고르고, 동점이면 무작위로 고르며, 하나도 겹치지 않으면 고르지 않는다.
 - 태그 목록 `SOUND_TAGS`는 현재 `supabase/functions/_shared/sound_tags.ts`에 있다. `sounds.tags`와 Gemini 태그는 이 목록의 영문 소문자 단어만 쓴다.
 - `sounds.tags`는 "어울리는 상황"(`SOUND_TAGS`)이고, `sounds.contains`는 "음원에 실제로 들리는 소리"다. 고를 때 점수는 `tags`로 매기고, 제외는 `contains`로 판단한다.
 - 입력: `{ "mode": "ambient" | "music", "tags": SOUND_TAGS 안의 값 배열, "existing_sounds": 이미 들리는 소리 종류 배열 }`

@@ -126,7 +126,7 @@ export function callGemini(body: GeminiBody, options: CallOptions): Promise<Gemi
     let next = 0;
     let running = 0;
     let done = false;
-    let hedgeTimer: number | undefined;
+    let hedgeTimer: ReturnType<typeof setTimeout> | undefined;
 
     const finish = (result: GeminiResult) => {
       if (done) return;
