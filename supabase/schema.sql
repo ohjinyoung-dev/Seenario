@@ -129,7 +129,7 @@ create index if not exists sounds_contains_idx on public.sounds using gin (conta
 -- 새 음원을 올리면 실제로 들리는 소리를 직접 듣고 contains를 채운다.
 update public.sounds set contains = array['rain'] where file_path = 'ambient/rain-window.mp3';                         -- 창밖 빗소리
 update public.sounds set contains = array['water'] where file_path = 'ambient/ocean-waves.mp3';                       -- 파도 소리
-update public.sounds set contains = array['birds', 'wind'] where file_path = 'ambient/forest-evening.mp3';            -- 저녁 숲: 새소리, 바람
+update public.sounds set contains = array['birds', 'wind'] where file_path = 'ambient/forest-morning.mp3';            -- 아침 숲: 새소리, 바람 (2026-11-05 forest-evening에서 이름 변경)
 update public.sounds set contains = array['rain', 'traffic', 'people'] where file_path = 'ambient/city-street-rain.mp3'; -- 비 오는 거리: 비, 차, 사람
 update public.sounds set contains = array['fire'] where file_path = 'ambient/campfire-crackling.mp3';                -- 장작 타는 소리: 불
 update public.sounds set contains = array['insects'] where file_path = 'ambient/crickets-night.mp3';                 -- 여름밤 풀벌레: 벌레
