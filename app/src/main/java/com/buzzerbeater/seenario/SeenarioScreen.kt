@@ -92,6 +92,8 @@ import com.buzzerbeater.seenario.sound.LastSoundMode
 import com.buzzerbeater.seenario.sound.MediaPlayerSoundEngine
 import com.buzzerbeater.seenario.sound.SoundActionRunner
 import com.buzzerbeater.seenario.sound.SoundCache
+import com.buzzerbeater.seenario.sound.SoundFeedbackPolicy
+import com.buzzerbeater.seenario.sound.SoundLog
 import com.buzzerbeater.seenario.sound.SoundNoticeStorage
 import com.buzzerbeater.seenario.sound.SoundModePolicy
 import com.buzzerbeater.seenario.sound.SoundModeStore
@@ -220,6 +222,12 @@ class SeenarioController(
     /** 처음 소리를 틀 때 하는 안전 안내를 이미 했는지. 저장소에서 읽기 전에는 false. */
     private var soundNoticeDone = false
 
+    /**
+     * 듣는 중·생각하는 중이 된 횟수. 소리 요청을 보낸 뒤로 대화가 있었는지 볼 때 쓴다
+     * (그랬다면 소리를 못 고른 안내를 하지 않는다).
+     */
+    private var conversationCount = 0
+
     /** TalkBack이 말하는 중인지(API 30 이상에서만 알 수 있다). 소리를 낮출 때 쓴다. */
     private var talkBackSpeaking by mutableStateOf(false)
     private val talkBackMonitor = TalkBackSpeechMonitor(
@@ -299,6 +307,16 @@ class SeenarioController(
         activity.lifecycleScope.launch { soundNoticeDone = soundNoticeDone || soundNotice.isDone() }
         duckWhileSpeaking()
         dimWhilePowerSave()
+        countConversations()
+    }
+
+    /** 듣는 중이나 생각하는 중이 될 때마다 [conversationCount]를 올린다. */
+    private fun countConversations() {
+        activity.lifecycleScope.launch {
+            snapshotFlow { status }.distinctUntilChanged().collect {
+                if (it == SeenarioStatus.LISTENING || it == SeenarioStatus.THINKING) conversationCount++
+            }
+        }
     }
 
     fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean = voice.handleKeyDown(keyCode, event)
@@ -459,18 +477,25 @@ class SeenarioController(
         if (settings.soundMode != SoundMode.OFF.wire) saveSoundModeToDb(SoundMode.OFF)
     }
 
-    /** 소리 모드를 바꾸고 TTS로 알린 뒤, 지난 모드(휴대폰)와 user_settings.sound_mode(DB)에 저장한다. */
+    /**
+     * 소리 모드를 바꾸고 TTS로 알린 뒤, 지난 모드(휴대폰)와 user_settings.sound_mode(DB)에 저장한다.
+     * 이미 같은 환경음/배경음 모드면 모드 안내 없이 지금 장면으로 소리 요청만 다시 보낸다.
+     */
     private fun changeSoundMode(mode: SoundMode) {
         val old = Session.soundMode
+        val plan = SoundFeedbackPolicy.planModeCommand(old, mode)
         Session.soundModeChangedByUser = true
         Session.soundMode = mode
         // 기본 모드로 바뀌거나 환경음 ↔ 배경음으로 바뀌면 지금 소리를 페이드로 멈춘다.
         // 사용자가 직접 말한 명령이므로 요청 순서 규칙과 상관없이 바로 적용한다.
         soundActions.onUserSoundModeChanged(old, mode)
-        // 처음 소리를 켤 때는 모드 안내 뒤에 안전 안내를 이어 읽는다(소리 요청의 응답은 읽지 않으므로).
-        val turningOn = mode != SoundMode.OFF
-        voice.speak(if (turningOn && !soundNoticeDone) "${soundModeNotice(mode)} $MSG_SOUND_SAFETY" else soundModeNotice(mode))
-        if (turningOn) requestSound(mode, sameMode = old == mode) else cancelSoundRequest("기본 모드로 바뀜")
+        if (plan.announceMode) {
+            // 처음 소리를 켤 때는 모드 안내 뒤에 안전 안내를 이어 읽는다(소리 요청의 응답은 읽지 않으므로).
+            val notice = soundModeNotice(mode)
+            voice.speak(if (plan.requestSound && !soundNoticeDone) "$notice $MSG_SOUND_SAFETY" else notice)
+        }
+        if (plan.sameModeAgain) SoundLog.d("같은 모드 다시 요청: ${mode.wire} (모드 안내 없이 소리 요청을 다시 보냄)")
+        if (plan.requestSound) requestSound(mode) else cancelSoundRequest("기본 모드로 바뀜")
         activity.lifecycleScope.launch { lastSoundMode.record(mode) }
         saveSoundModeToDb(mode)
     }
@@ -489,16 +514,14 @@ class SeenarioController(
     }
 
     /**
-     * 소리 모드를 켤 때 조용한 소리 요청을 보낸다. "생각하는 중"으로 바꾸지 않아서 사용자는 바로 다른 말을 할 수 있다.
-     * 응답의 speech는 읽지 않고 actions만 실행한다. 같은 모드에서 이미 소리가 나오고 있으면 보내지 않는다.
+     * 소리 모드를 켤 때(같은 모드를 다시 켤 때 포함) 조용한 소리 요청을 보낸다.
+     * "생각하는 중"으로 바꾸지 않아서 사용자는 바로 다른 말을 할 수 있다.
+     * 응답의 speech는 읽지 않고 actions만 실행한다. 소리를 못 골랐거나 요청이 실패하면 [announceSoundOutcome]이 알린다.
      */
-    private fun requestSound(mode: SoundMode, sameMode: Boolean) {
-        if (sameMode && player.activeSoundId != null) {
-            Log.d(AGENT_TAG, "[sound] 같은 모드에서 이미 재생 중이라 요청하지 않음")
-            return
-        }
+    private fun requestSound(mode: SoundMode) {
         cancelSoundRequest("새 소리 요청")
         val seq = soundActions.nextRequest()
+        val conversationsAtRequest = conversationCount
         soundRequestJob = activity.lifecycleScope.launch {
             // 절전 모드에서는 사진을 이때 새로 만든다(최대 1초).
             val image = frames.fresh()?.jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
@@ -507,8 +530,41 @@ class SeenarioController(
             } catch (e: TimeoutCancellationException) {
                 Log.w(AGENT_TAG, "[sound] 응답 시간 초과")
                 null
-            } ?: return@launch
-            runSoundActions(result.actions, mode, seq)
+            }
+            if (result != null) runSoundActions(result.actions, mode, seq)
+            announceSoundOutcome(SoundFeedbackPolicy.outcomeOf(result?.actions), mode, conversationsAtRequest)
+        }
+    }
+
+    /**
+     * 소리 요청 결과가 "소리 없음"이나 "실패"면 TTS로 알린다([SoundFeedbackPolicy.decide]).
+     * 모드 안내처럼 앱이 하던 말을 끊지 않도록(TTS는 새 말이 오면 하던 말을 끊는다) 그 말이 끝나길 기다린 뒤 판단한다.
+     * 대화 중이거나 그 사이 대화가 있었으면, 모드가 바뀌었으면, 이미 소리가 나오고 있으면 알리지 않는다.
+     */
+    private suspend fun announceSoundOutcome(
+        outcome: SoundFeedbackPolicy.Outcome,
+        mode: SoundMode,
+        conversationsAtRequest: Int,
+    ) {
+        if (outcome == SoundFeedbackPolicy.Outcome.SOUND) return
+        val label = if (outcome == SoundFeedbackPolicy.Outcome.NO_SOUND) "소리 없음 안내" else "실패 안내"
+        withTimeoutOrNull(SPEECH_WAIT_MS) {
+            snapshotFlow { voice.uiState.status }.first { it != VoiceStatus.SPEAKING }
+        }
+        val decision = SoundFeedbackPolicy.decide(
+            outcome,
+            SoundFeedbackPolicy.Situation(
+                requestMode = mode,
+                currentMode = Session.soundMode,
+                conversationNow = status != SeenarioStatus.IDLE,
+                conversationSinceRequest = conversationCount != conversationsAtRequest,
+                soundActive = player.activeSoundId != null,
+            ),
+        )
+        val message = decision.message
+        SoundLog.d("$label: ${if (message != null) "함" else "안 함"} (${decision.reason}, mode=${mode.wire})")
+        if (message != null && activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            voice.speak(message)
         }
     }
 
