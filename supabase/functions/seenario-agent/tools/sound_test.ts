@@ -83,6 +83,97 @@ Deno.test("태그가 많은 음원이 항상 이기지는 않는다(비율 점�
   assertEquals(chooseSound([fewTags, manyTags], input, () => 0.99)?.id, "few");
 });
 
+// 실제 배경음 기록(schema.sql)과 같은 태그
+const vivaldiAutumn: SoundCandidate = {
+  id: "vivaldi-autumn",
+  title: "비발디 - 사계 가을 3악장",
+  file_path: "music/vivaldi-autumn-allegro.mp3",
+  loopable: true,
+  tags: ["autumn", "park", "forest", "outdoor", "daytime", "lively"],
+  contains: ["music"],
+};
+
+const vivaldiWinter: SoundCandidate = {
+  id: "vivaldi-winter",
+  title: "비발디 - 사계 겨울 2악장",
+  file_path: "music/vivaldi-winter-largo.mp3",
+  loopable: true,
+  tags: ["winter", "snow", "indoor", "home", "cozy", "calm", "evening"],
+  contains: ["music"],
+};
+
+const schumann: SoundCandidate = {
+  id: "schumann",
+  title: "슈만 - 트로이메라이",
+  file_path: "music/schumann-traumerei.mp3",
+  loopable: true,
+  tags: ["home", "indoor", "evening", "night", "winter", "calm", "cozy", "nostalgic"],
+  contains: ["music"],
+};
+
+const grieg: SoundCandidate = {
+  id: "grieg",
+  title: "그리그 - 아침 기분",
+  file_path: "music/grieg-morning-mood.mp3",
+  loopable: true,
+  tags: ["morning", "park", "forest", "outdoor", "sunny", "spring", "refreshing", "bright"],
+  contains: ["music"],
+};
+
+Deno.test("실내·낮·차분·가을 장면에서는 비발디 가을(outdoor)이 뽑히지 않는다", () => {
+  const input = { mode: "music" as const, tags: ["indoor", "daytime", "calm", "autumn"], existing_sounds: [] };
+  // 점수만 보면 비발디 가을(2/√6 ≈ 0.82)이 비발디 겨울(2/√7 ≈ 0.76)보다 높지만, outdoor라서 빠진다.
+  assertEquals(chooseSound([vivaldiAutumn, vivaldiWinter], input, first)?.id, "vivaldi-winter");
+  assertEquals(chooseSound([vivaldiWinter, vivaldiAutumn], input, () => 0.99)?.id, "vivaldi-winter");
+  // 비발디 가을만 있으면 아무것도 고르지 않는다.
+  assertEquals(chooseSound([vivaldiAutumn], input, first), null);
+});
+
+Deno.test("야외 장면에서는 실내 곡이 뽑히지 않는다", () => {
+  const input = { mode: "music" as const, tags: ["outdoor", "evening", "calm", "cozy"], existing_sounds: [] };
+  // 점수만 보면 슈만(3/√8 ≈ 1.06), 비발디 겨울(3/√7 ≈ 1.13)이 그리그(1/√8 ≈ 0.35)보다 높지만, indoor라서 빠진다.
+  assertEquals(chooseSound([schumann, vivaldiWinter, grieg], input, first)?.id, "grieg");
+  assertEquals(chooseSound([grieg, schumann, vivaldiWinter], input, () => 0.99)?.id, "grieg");
+  // 실내 곡만 있으면 아무것도 고르지 않는다.
+  assertEquals(chooseSound([schumann, vivaldiWinter], input, first), null);
+});
+
+Deno.test("장면에 indoor와 outdoor가 둘 다 있으면 장소로 빼지 않고 점수만으로 고른다", () => {
+  // 테라스처럼 애매한 장면. 두 곡 모두 후보에 남는다.
+  const input = { mode: "music" as const, tags: ["indoor", "outdoor", "evening", "calm", "cozy"], existing_sounds: [] };
+  // 점수: 비발디 겨울(indoor, evening, calm, cozy = 4/√7 ≈ 1.51) > 그리그(outdoor = 1/√8 ≈ 0.35)
+  assertEquals(chooseSound([grieg, vivaldiWinter], input, first)?.id, "vivaldi-winter");
+  assertEquals(chooseSound([vivaldiWinter, grieg], input, () => 0.99)?.id, "vivaldi-winter");
+  // outdoor 곡만 있어도 빠지지 않고 골라진다.
+  assertEquals(chooseSound([grieg], input, first)?.id, "grieg");
+  // indoor 곡만 있어도 빠지지 않고 골라진다.
+  assertEquals(chooseSound([schumann], input, first)?.id, "schumann");
+});
+
+Deno.test("점수는 겹친 태그 수 ÷ √(음원 태그 수)로 완만하게 매긴다", () => {
+  // 1개 겹침 / 태그 1개 = 1.0, 3개 겹침 / 태그 4개 = 3/2 = 1.5 → 태그가 더 많아도 더 많이 겹친 쪽이 이긴다.
+  // (예전 방식 겹친 수 ÷ 태그 수였다면 1.0 대 0.75로 태그 1개짜리가 이겼다.)
+  const single: SoundCandidate = {
+    id: "single",
+    title: "태그 1개",
+    file_path: "music/single.mp3",
+    loopable: true,
+    tags: ["calm"],
+    contains: ["music"],
+  };
+  const four: SoundCandidate = {
+    id: "four",
+    title: "태그 4개",
+    file_path: "music/four.mp3",
+    loopable: true,
+    tags: ["calm", "night", "rain", "city"],
+    contains: ["music"],
+  };
+  const input = { mode: "music" as const, tags: ["calm", "night", "rain"], existing_sounds: [] };
+  assertEquals(chooseSound([single, four], input, first)?.id, "four");
+  assertEquals(chooseSound([four, single], input, () => 0.99)?.id, "four");
+});
+
 Deno.test("겹치는 태그가 없으면 null", () => {
   const input = { mode: "ambient" as const, tags: ["city", "busy"], existing_sounds: [] };
   assertEquals(chooseSound([forestEvening, oceanWaves], input, first), null);
