@@ -136,3 +136,72 @@ update public.sounds set contains = array['insects'] where file_path = 'ambient/
 update public.sounds set contains = array['insects'] where file_path = 'ambient/cicada-chorus.mp3';                  -- 여름 저녁 매미: 벌레
 update public.sounds set contains = array['birds'] where file_path = 'ambient/forest-evening.mp3';                   -- 저녁 숲: 새소리 (2026-11-05 새 음원)
 update public.sounds set contains = array['music'] where mode = 'music';                                              -- 배경음악은 모두 music
+
+-- ---------------------------------------------------------------------------
+-- 배경음(music) 9곡 추가 (2026-11-05, 기록용(대시보드에서 실행 완료))
+-- - 파일은 Storage 버킷 'sounds'의 music/ 폴더. 128kbps mp3, 음량 -16 LUFS로 맞춤.
+-- - duration_sec은 변환한 mp3 길이를 반올림한 값.
+-- ---------------------------------------------------------------------------
+insert into public.sounds (mode, title, file_path, source, license, tags, contains, duration_sec) values
+    -- 그리그 - 아침 기분
+    ('music', '그리그 - 아침 기분', 'music/grieg-morning-mood.mp3',
+     'https://commons.wikimedia.org/wiki/File:Henrik_Ibsen,_Edvard_Grieg_-_Morgenstemning_(Morning_Mood).ogg',
+     'Public domain',
+     array['morning','park','forest','outdoor','sunny','spring','refreshing','bright'],
+     array['music'], 224),
+    -- 비발디 - 사계 봄 3악장
+    -- 메모: Musopen 출처, PDM, 음높이 -20센트 조정, 메타데이터 Orpheus 표기, 출시 전 교체 검토
+    ('music', '비발디 - 사계 봄 3악장', 'music/vivaldi-spring-allegro.mp3',
+     'https://commons.wikimedia.org/wiki/File:The_Modena_Chamber_Orchestra_-_Vivaldi%27s_Spring,_RV_269_-_III._Allegro.ogg',
+     'PDM-owner',
+     array['spring','park','outdoor','daytime','sunny','lively','bright'],
+     array['music'], 258),
+    -- 비발디 - 사계 가을 3악장
+    -- 메모: Musopen 출처, PDM, 음높이 -20센트 조정, 메타데이터 Orpheus 표기, 출시 전 교체 검토
+    ('music', '비발디 - 사계 가을 3악장', 'music/vivaldi-autumn-allegro.mp3',
+     'https://commons.wikimedia.org/wiki/File:The_Modena_Chamber_Orchestra_-_Vivaldi%27s_Autumn,_RV_293_-_III._Allegro.ogg',
+     'PDM-owner',
+     array['autumn','park','forest','outdoor','daytime','lively'],
+     array['music'], 202),
+    -- 비발디 - 사계 겨울 2악장
+    -- 메모: Musopen 출처, PDM, 음높이 -20센트 조정, 메타데이터 Orpheus 표기, 출시 전 교체 검토
+    ('music', '비발디 - 사계 겨울 2악장', 'music/vivaldi-winter-largo.mp3',
+     'https://commons.wikimedia.org/wiki/File:The_Modena_Chamber_Orchestra_-_Vivaldi%27s_Winter,_RV_297_-_II._Largo.ogg',
+     'PDM-owner',
+     array['winter','snow','indoor','home','cozy','calm','evening'],
+     array['music'], 164),
+    -- 슈만 - 트로이메라이
+    ('music', '슈만 - 트로이메라이', 'music/schumann-traumerei.mp3',
+     'https://commons.wikimedia.org/wiki/File:Robert_Schumann_-_scenes_from_childhood,_op._15_-_vii._dreaming.ogg',
+     'Public domain',
+     array['home','indoor','evening','night','winter','calm','cozy','nostalgic'],
+     array['music'], 203),
+    -- 조플린 - 엔터테이너 (아래 update로 indoor, busy 태그 추가)
+    ('music', '조플린 - 엔터테이너', 'music/joplin-entertainer.mp3',
+     'https://commons.wikimedia.org/wiki/File:The_Entertainer_-_Scott_Joplin.ogg',
+     'Public domain',
+     array['cafe','restaurant','street','city','daytime','lively','bright'],
+     array['music'], 234),
+    -- 헨델 - 수상 음악 혼파이프
+    ('music', '헨델 - 수상 음악 혼파이프', 'music/handel-water-music-hornpipe.mp3',
+     'https://commons.wikimedia.org/wiki/File:Handel%27s_Water_Music_-_12._Alla_hornpipe_-_Chamber_Orchestra_-_United_States_Marine_Band.opus',
+     'Public domain',
+     array['water','beach','outdoor','sunny','summer','daytime','lively','bright'],
+     array['music'], 229),
+    -- 베토벤 - 전원 교향곡 3악장
+    ('music', '베토벤 - 전원 교향곡 3악장', 'music/beethoven-pastoral-allegro.mp3',
+     'https://commons.wikimedia.org/wiki/File:Ludwig_van_Beethoven_-_symphony_no._6_in_f_major_%27pastoral%27,_op._68_-_iii._allegro.ogg',
+     'Public domain',
+     array['forest','mountain','park','outdoor','spring','summer','lively','refreshing'],
+     array['music'], 201),
+    -- 쇼팽 - 녹턴 2번
+    ('music', '쇼팽 - 녹턴 2번', 'music/chopin-nocturne-op9-2.mp3',
+     'https://commons.wikimedia.org/wiki/File:Chopin_-_Nocturne_No._2_in_E-flat_major,_Op._9_No._2_(Frank_Levy).flac',
+     'Public domain',
+     array['restaurant','cafe','indoor','evening','night','romantic','cozy','calm'],
+     array['music'], 272);
+
+-- 조플린 - 엔터테이너 태그 추가: 실내의 활기찬 장면용 (2026-11-05, 기록용(대시보드에서 실행 완료))
+update public.sounds
+set tags = array_cat(tags, array['indoor','busy'])
+where file_path = 'music/joplin-entertainer.mp3';
