@@ -207,3 +207,19 @@ insert into public.sounds (mode, title, file_path, source, license, tags, contai
 update public.sounds
 set tags = array_cat(tags, array['indoor','busy'])
 where file_path = 'music/joplin-entertainer.mp3';
+
+-- ---------------------------------------------------------------------------
+-- gemini_model_status (Gemini 모델 건너뛰기 기록, _shared/model_status.ts가 읽고 쓴다)
+-- - 과부하(503/500/504)·응답 없음(slow)·시간 초과(timeout)는 10분, 한도 초과(quota)는 Google이 알려 준 시간까지.
+-- - 모든 Edge Function 인스턴스가 함께 보도록 DB에 둔다.
+-- - RLS만 켜고 정책은 만들지 않는다: 앱(anon/authenticated)은 접근 불가, Edge Function은 service role로 접근.
+-- ---------------------------------------------------------------------------
+create table if not exists public.gemini_model_status (
+    model       text primary key,
+    skip_until  timestamptz not null,
+    reason      text not null check (reason in ('overloaded', 'slow', 'timeout', 'quota')),
+    last_status text,
+    last_ms     integer,
+    updated_at  timestamptz not null default now()
+);
+alter table public.gemini_model_status enable row level security;
