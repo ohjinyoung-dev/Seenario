@@ -138,6 +138,18 @@ Deno.test("야외 장면에서는 실내 곡이 뽑히지 않는다", () => {
   assertEquals(chooseSound([schumann, vivaldiWinter], input, first), null);
 });
 
+Deno.test("장면에 indoor와 outdoor가 둘 다 있으면 장소로 빼지 않고 점수만으로 고른다", () => {
+  // 테라스처럼 애매한 장면. 두 곡 모두 후보에 남는다.
+  const input = { mode: "music" as const, tags: ["indoor", "outdoor", "evening", "calm", "cozy"], existing_sounds: [] };
+  // 점수: 비발디 겨울(indoor, evening, calm, cozy = 4/√7 ≈ 1.51) > 그리그(outdoor = 1/√8 ≈ 0.35)
+  assertEquals(chooseSound([grieg, vivaldiWinter], input, first)?.id, "vivaldi-winter");
+  assertEquals(chooseSound([vivaldiWinter, grieg], input, () => 0.99)?.id, "vivaldi-winter");
+  // outdoor 곡만 있어도 빠지지 않고 골라진다.
+  assertEquals(chooseSound([grieg], input, first)?.id, "grieg");
+  // indoor 곡만 있어도 빠지지 않고 골라진다.
+  assertEquals(chooseSound([schumann], input, first)?.id, "schumann");
+});
+
 Deno.test("점수는 겹친 태그 수 ÷ √(음원 태그 수)로 완만하게 매긴다", () => {
   // 1개 겹침 / 태그 1개 = 1.0, 3개 겹침 / 태그 4개 = 3/2 = 1.5 → 태그가 더 많아도 더 많이 겹친 쪽이 이긴다.
   // (예전 방식 겹친 수 ÷ 태그 수였다면 1.0 대 0.75로 태그 1개짜리가 이겼다.)
