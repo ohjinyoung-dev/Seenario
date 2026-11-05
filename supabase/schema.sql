@@ -132,4 +132,5 @@ update public.sounds set contains = array['water'] where file_path = 'ambient/oc
 update public.sounds set contains = array['birds', 'wind'] where file_path = 'ambient/forest-evening.mp3';            -- 저녁 숲: 새소리, 바람
 update public.sounds set contains = array['rain', 'traffic', 'people'] where file_path = 'ambient/city-street-rain.mp3'; -- 비 오는 거리: 비, 차, 사람
 update public.sounds set contains = array['fire'] where file_path = 'ambient/campfire-crackling.mp3';                -- 장작 타는 소리: 불
+update public.sounds set contains = array['insects'] where file_path = 'ambient/crickets-night.mp3';                 -- 여름밤 풀벌레: 벌레
 update public.sounds set contains = array['music'] where mode = 'music';                                              -- 배경음악은 모두 music
