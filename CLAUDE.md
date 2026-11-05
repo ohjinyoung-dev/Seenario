@@ -87,7 +87,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 ## Database
 
-`supabase/schema.sql` is the reference schema for `user_settings` and `memories` (both keyed to `auth.users`, RLS restricting rows to `auth.uid()`, `updated_at` trigger on `user_settings`), plus the shared read-only `sounds` catalog (ambient/music tracks; files live in the private Storage bucket `sounds`, rows point to them via `file_path`). In `sounds`, `tags` means "which situations it suits" (values from `SOUND_TAGS`), and `contains` means "which sounds are actually audible in the track". `contains` is `text[] not null default '{}'`, limited to `birds`, `wind`, `rain`, `water`, `traffic`, `people`, `music`, and has a GIN index `sounds_contains_idx`. The live tables were created manually in the Supabase dashboard, so this file is not applied automatically — when changing the schema, give the user incremental SQL to run rather than re-running the whole file. Anonymous sign-ins must be enabled in the Supabase project.
+`supabase/schema.sql` is the reference schema for `user_settings` and `memories` (both keyed to `auth.users`, RLS restricting rows to `auth.uid()`, `updated_at` trigger on `user_settings`), plus the shared read-only `sounds` catalog (ambient/music tracks; files live in the private Storage bucket `sounds`, rows point to them via `file_path`). In `sounds`, `tags` means "which situations it suits" (values from `SOUND_TAGS`), and `contains` means "which sounds are actually audible in the track". `contains` is `text[] not null default '{}'`, limited to `birds`, `wind`, `rain`, `water`, `traffic`, `people`, `music`, `insects`, `fire`, and has a GIN index `sounds_contains_idx`. The live tables were created manually in the Supabase dashboard, so this file is not applied automatically — when changing the schema, give the user incremental SQL to run rather than re-running the whole file. Anonymous sign-ins must be enabled in the Supabase project.
 
 ## 에이전트 구조 (ReAct)
 
@@ -145,7 +145,7 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 - 태그 목록 `SOUND_TAGS`는 현재 `supabase/functions/_shared/sound_tags.ts`에 있다. `sounds.tags`와 Gemini 태그는 이 목록의 영문 소문자 단어만 쓴다.
 - `sounds.tags`는 "어울리는 상황"(`SOUND_TAGS`)이고, `sounds.contains`는 "음원에 실제로 들리는 소리"다. 고를 때 점수는 `tags`로 매기고, 제외는 `contains`로 판단한다.
 - 입력: `{ "mode": "ambient" | "music", "tags": SOUND_TAGS 안의 값 배열, "existing_sounds": 이미 들리는 소리 종류 배열 }`
-  - `existing_sounds` 값은 `contains`와 같은 목록을 쓴다: `birds`, `wind`, `rain`, `water`, `traffic`, `people`, `music`.
+  - `existing_sounds` 값은 `contains`와 같은 목록을 쓴다: `birds`, `wind`, `rain`, `water`, `traffic`, `people`, `music`, `insects`, `fire`.
 - 출력: `{ "sound_id", "title", "url"(1시간 signed URL), "loopable" }` 또는 `null`
 - `contains`가 `existing_sounds`와 하나라도 겹치는 음원은 제외한다. 실제 주변 소리와 같은 소리를 겹쳐 틀지 않기 위해서다.
 
