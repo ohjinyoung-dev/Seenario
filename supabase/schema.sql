@@ -135,6 +135,8 @@ update public.sounds set contains = array['fire'] where file_path = 'ambient/cam
 update public.sounds set contains = array['insects'] where file_path = 'ambient/crickets-night.mp3';                 -- 여름밤 풀벌레: 벌레
 update public.sounds set contains = array['insects'] where file_path = 'ambient/cicada-chorus.mp3';                  -- 여름 저녁 매미: 벌레
 update public.sounds set contains = array['birds'] where file_path = 'ambient/forest-evening.mp3';                   -- 저녁 숲: 새소리 (2026-11-05 새 음원)
+update public.sounds set contains = array['wind'] where file_path = 'ambient/wind-trees.mp3';                       -- 바람에 살랑이는 나뭇잎: 바람
+update public.sounds set contains = array['birds'] where file_path = 'ambient/owl-night.mp3';                       -- 밤 숲 부엉이: 새소리
 update public.sounds set contains = array['music'] where mode = 'music';                                              -- 배경음악은 모두 music
 
 -- ---------------------------------------------------------------------------
