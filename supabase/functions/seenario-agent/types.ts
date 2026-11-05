@@ -43,7 +43,7 @@ export class AgentError extends Error {
 }
 
 /** 지금 주변에서 들리는 소리 종류. sounds.contains와 같은 목록. */
-export const EXISTING_SOUNDS = ["birds", "wind", "rain", "water", "traffic", "people", "music"] as const;
+export const EXISTING_SOUNDS = ["birds", "wind", "rain", "water", "traffic", "people", "music", "insects", "fire"] as const;
 const EXISTING_SET = new Set<string>(EXISTING_SOUNDS);
 
 /** 목록에 있는 소리 종류만 남기고 중복을 없앤다. */
