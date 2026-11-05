@@ -17,8 +17,10 @@ const TAG_GUIDE = SOUND_TAG_KEYS.map((k) => `${k}(${SOUND_TAGS[k]})`).join(", ")
 const SOUND_FIELDS_GUIDE =
   `- tags: 분위기 태그 3~${MAX_TAGS}개. 반드시 아래 목록의 영문 단어 중에서만. 장소, 날씨, 계절, 시간대, 분위기 중 사진에서 알 수 있는 것만 골라.
   목록: ${TAG_GUIDE}
+  창문 안쪽(실내)에서 바깥 풍경을 찍은 사진이면 indoor와 outdoor를 둘 다 넣고, 바깥 풍경의 분위기(예: 나무가 흔들리면 wind)도 함께 넣어.
 - existing_sounds: 이 장소에서 지금 실제로 들릴 것 같은 소리 종류. 사진으로 짐작할 수 있는 것만, 없으면 빈 배열.
-  insects는 풀벌레·매미 소리가 들릴 만한 풀숲이나 여름·가을 야외, fire는 모닥불·벽난로·장작불이 보일 때만.`;
+  insects는 풀벌레·매미 소리가 들릴 만한 풀숲이나 여름·가을 야외, fire는 모닥불·벽난로·장작불이 보일 때만.
+  창문 안쪽(실내)에서 바깥 풍경을 찍은 사진이면, 바깥 소리(바람, 새, 차 등)는 유리창에 막혀 실내에서 들리지 않으니 existing_sounds에 넣지 마. 바깥 풍경의 분위기는 tags로만 표현해.`;
 
 /** 모든 요청에 공통으로 붙는 역할과 말투. */
 export function systemPrompt(soundMode: SoundModeOrOff, hasImage: boolean): string {
