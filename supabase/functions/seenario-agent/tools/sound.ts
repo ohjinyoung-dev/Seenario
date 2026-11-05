@@ -2,7 +2,10 @@
 // - 같은 mode이고 is_active인 음원만 후보로 본다.
 // - contains(음원에 실제로 들리는 소리)가 existing_sounds(지금 주변에서 들리는 소리)와 하나라도 겹치면 뺀다.
 //   실제 주변 소리와 같은 소리를 겹쳐 틀지 않기 위해서다.
-// - 점수 = 겹친 태그 수 ÷ 그 음원의 태그 수. 태그를 많이 단 음원이 늘 이기지 않도록 비율로 매긴다.
+// - 장소가 반대인 음원은 뺀다. 장면 태그에 indoor가 있으면 tags에 outdoor가 있는 음원을,
+//   outdoor가 있으면 indoor가 있는 음원을 후보에서 제외한다.
+// - 점수 = 겹친 태그 수 ÷ √(그 음원의 태그 수). 태그를 많이 단 음원이 늘 이기지 않으면서도,
+//   태그가 적은 음원이 한두 개만 겹쳐서 쉽게 이기지 않도록 완만하게 나눈다.
 //   가장 높은 점수끼리 동점이면 무작위로 고른다.
 // - 겹친 태그가 없거나 점수가 MIN_SCORE보다 낮으면 고르지 않는다(null).
 
@@ -35,11 +38,19 @@ export type SoundCandidate = {
   contains: string[];
 };
 
-/** 음원 하나의 점수(겹친 태그 수 ÷ 음원의 태그 수)와 겹친 태그 수. */
+/** 음원 하나의 점수(겹친 태그 수 ÷ √음원의 태그 수)와 겹친 태그 수. */
 function score(row: SoundCandidate, wanted: Set<string>): { overlap: number; score: number } {
   const tags = row.tags ?? [];
   const overlap = tags.filter((t) => wanted.has(t)).length;
-  return { overlap, score: tags.length === 0 ? 0 : overlap / tags.length };
+  return { overlap, score: tags.length === 0 ? 0 : overlap / Math.sqrt(tags.length) };
+}
+
+/** 장면이 indoor면 outdoor 음원을, outdoor면 indoor 음원을 뺄 태그 목록. */
+function oppositePlaceTags(wanted: Set<string>): string[] {
+  const opposite: string[] = [];
+  if (wanted.has("indoor")) opposite.push("outdoor");
+  if (wanted.has("outdoor")) opposite.push("indoor");
+  return opposite;
 }
 
 /**
@@ -55,9 +66,11 @@ export function chooseSound(
   const wanted = new Set<string>(normalizeTags(input.tags));
   if (wanted.size === 0) return null;
   const existing = new Set(input.existing_sounds.map((s) => s.trim().toLowerCase()));
+  const opposite = oppositePlaceTags(wanted);
 
   const scored = rows
     .filter((r) => !(r.contains ?? []).some((c) => existing.has(c)))
+    .filter((r) => !(r.tags ?? []).some((t) => opposite.includes(t)))
     .map((r) => ({ r, ...score(r, wanted) }))
     .filter((s) => s.overlap > 0 && s.score >= MIN_SCORE);
   if (scored.length === 0) return null;
