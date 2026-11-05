@@ -122,4 +122,23 @@ class CommandParserTest {
         assertEquals(VoiceCommand.UNKNOWN, CommandParser.parse(listOf("안녕", "고마워")))
         assertEquals(VoiceCommand.UNKNOWN, CommandParser.parse(emptyList()))
     }
+    @Test
+    fun powerSave() {
+        assertCommand(VoiceCommand.POWER_SAVE_ON, "절전 모드 켜")
+        assertCommand(VoiceCommand.POWER_SAVE_ON, "절전 모드로 바꿔줘")
+        assertCommand(VoiceCommand.POWER_SAVE_ON, "배터리 절약 모드")
+        assertCommand(VoiceCommand.POWER_SAVE_OFF, "절전 모드 꺼")
+        assertCommand(VoiceCommand.POWER_SAVE_OFF, "절전 모드 꺼줘")
+        assertCommand(VoiceCommand.POWER_SAVE_OFF, "절전 모드 끄기")
+        assertCommand(VoiceCommand.POWER_SAVE_OFF, "절약 모드 해제")
+        assertCommand(VoiceCommand.POWER_SAVE_OFF, "절전 모드 그만")
+    }
+
+    @Test
+    fun powerSave_doesNotChangeOtherCommands() {
+        assertCommand(VoiceCommand.SOUND_OFF, "소리 꺼")
+        assertCommand(VoiceCommand.SOUND_OFF, "기본 모드")
+        assertCommand(VoiceCommand.SOUND_AMBIENT, "환경음 모드")
+        assertCommand(VoiceCommand.DESCRIBE, "묘사해줘")
+    }
 }

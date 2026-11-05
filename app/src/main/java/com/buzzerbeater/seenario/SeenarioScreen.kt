@@ -1,14 +1,17 @@
 package com.buzzerbeater.seenario
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
@@ -18,6 +21,7 @@ import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -82,6 +86,7 @@ import com.buzzerbeater.seenario.camera.LatestFrameProvider
 import com.buzzerbeater.seenario.camera.SceneDescriber
 import com.buzzerbeater.seenario.data.SupabaseProvider
 import com.buzzerbeater.seenario.data.UserSettings
+import com.buzzerbeater.seenario.power.PowerSavePolicy
 import com.buzzerbeater.seenario.sound.DataStoreLastSoundModeStorage
 import com.buzzerbeater.seenario.sound.LastSoundMode
 import com.buzzerbeater.seenario.sound.MediaPlayerSoundEngine
@@ -139,6 +144,12 @@ private object Session {
     /** 지금 소리 모드. 앱을 켜면 항상 기본 모드(off)로 시작한다. */
     var soundMode by mutableStateOf(SoundMode.OFF)
 
+    /**
+     * 사용자가 말로 고른 절전 모드("절전 모드 켜/꺼"). null이면 휴대폰 절전 모드를 따른다.
+     * 휴대폰 절전 모드가 바뀌면 지운다. 저장하지 않으므로 앱을 다시 켜면 null이다.
+     */
+    var powerSaveChoice by mutableStateOf<Boolean?>(null)
+
     /** 사용자가 이미 말로 모드를 바꿨으면 늦게 끝난 시작 처리(DB를 off로 저장)가 덮어쓰지 않게 한다. */
     var soundModeChangedByUser = false
 
@@ -165,12 +176,22 @@ class SeenarioController(
 
     private val lastSoundMode = Session.lastSoundMode(activity.applicationContext)
 
-    /** 시작 안내 끝에 지난 모드가 환경음/배경음이면 다시 켜는 방법을 한 줄 붙인다. */
+    private val powerManager = activity.getSystemService(PowerManager::class.java)
+
+    /**
+     * 시작 안내 끝에 지난 모드가 환경음/배경음이면 다시 켜는 방법을 한 줄 붙인다.
+     * 휴대폰이 절전 모드면 절전 모드로 시작한다는 줄도 붙인다.
+     */
     val voice = VoiceController(
         activity,
         this,
         requestPermissions = ::requestPermissions,
-        startupGreeting = { greeting -> SoundModePolicy.startupGreeting(greeting, lastSoundMode.get()) },
+        startupGreeting = { greeting ->
+            PowerSavePolicy.startupGreeting(
+                SoundModePolicy.startupGreeting(greeting, lastSoundMode.get()),
+                systemPowerSave = powerManager?.isPowerSaveMode == true,
+            )
+        },
     )
     val trigger = DescribeTrigger()
     val describer = SceneDescriber(SupabaseProvider.client)
@@ -211,6 +232,16 @@ class SeenarioController(
     /** 에이전트(또는 대신하는 describe-scene) 응답을 기다리는 중. */
     var thinking by mutableStateOf(false)
         private set
+
+    /** 휴대폰 절전 모드가 켜져 있는지. 화면에 있는 동안 [powerSaveReceiver]로 따라간다. */
+    private var systemPowerSave by mutableStateOf(powerManager?.isPowerSaveMode == true)
+
+    /** 지금 절전 모드인지. 미리보기를 끄고(검은 화면, 밝기 최소) 사진은 요청할 때만 만든다. */
+    val powerSave: Boolean get() = PowerSavePolicy.isOn(Session.powerSaveChoice, systemPowerSave)
+
+    private val powerSaveReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = onSystemPowerSaveChanged()
+    }
 
     /** 지금 소리 모드. 화면 위쪽에 보여 준다. */
     val soundMode: SoundMode get() = Session.soundMode
@@ -267,6 +298,7 @@ class SeenarioController(
         if (startupQuiet) quietTalkBackDuringStartup()
         activity.lifecycleScope.launch { soundNoticeDone = soundNoticeDone || soundNotice.isDone() }
         duckWhileSpeaking()
+        dimWhilePowerSave()
     }
 
     fun handleKeyDown(keyCode: Int, event: KeyEvent): Boolean = voice.handleKeyDown(keyCode, event)
@@ -281,8 +313,20 @@ class SeenarioController(
         }
     }
 
+    override fun onStart(owner: LifecycleOwner) {
+        ContextCompat.registerReceiver(
+            activity,
+            powerSaveReceiver,
+            IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        // 화면 밖에 있는 동안 휴대폰 절전 모드가 바뀌었을 수 있다.
+        onSystemPowerSaveChanged()
+    }
+
     /** 앱이 화면에서 사라지면 소리를 바로 멈춘다. 돌아와도 다시 틀지 않고 다음 play_sound를 기다린다. */
     override fun onStop(owner: LifecycleOwner) {
+        activity.unregisterReceiver(powerSaveReceiver)
         cancelSoundRequest("앱이 화면에서 사라짐")
         player.stop(fade = false, reason = "앱이 화면에서 사라짐")
     }
@@ -304,6 +348,38 @@ class SeenarioController(
                     if (!speaking) delay(UNDUCK_DELAY_MS)
                     player.setDucking(speaking)
                 }
+        }
+    }
+
+    /** "절전 모드 켜/꺼". 휴대폰 절전 모드보다 사용자 선택을 따른다(휴대폰 절전 모드가 다시 바뀔 때까지). */
+    override fun onPowerSaveRequested(on: Boolean) {
+        val wasOn = powerSave
+        Session.powerSaveChoice = on
+        Log.d(TAG, "절전 모드 ${if (on) "켜기" else "끄기"} (사용자)")
+        voice.speak(PowerSavePolicy.userNotice(wasOn, on))
+    }
+
+    /** 휴대폰 절전 모드가 바뀌면 사용자 선택을 지우고 휴대폰을 따른다. 상태가 바뀌었을 때만 알린다. */
+    private fun onSystemPowerSaveChanged() {
+        val now = powerManager?.isPowerSaveMode == true
+        if (now == systemPowerSave) return
+        val wasOn = powerSave
+        systemPowerSave = now
+        Session.powerSaveChoice = null
+        Log.d(TAG, "휴대폰 절전 모드 ${if (now) "켜짐" else "꺼짐"}")
+        PowerSavePolicy.systemChangeNotice(wasOn, now)?.let { voice.speak(it) }
+    }
+
+    /** 절전 모드에서는 이 화면의 밝기를 최소로 낮추고, 끄면 시스템 밝기로 되돌린다. */
+    private fun dimWhilePowerSave() {
+        activity.lifecycleScope.launch {
+            snapshotFlow { powerSave }.distinctUntilChanged().collect { on ->
+                val window = activity.window
+                window.attributes = window.attributes.apply {
+                    screenBrightness = if (on) MIN_BRIGHTNESS else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                }
+                Log.d(TAG, if (on) "절전 모드 켜짐: 밝기 최소, 미리보기 끔" else "절전 모드 꺼짐: 밝기 되돌림, 미리보기 켬")
+            }
         }
     }
 
@@ -423,8 +499,9 @@ class SeenarioController(
         }
         cancelSoundRequest("새 소리 요청")
         val seq = soundActions.nextRequest()
-        val image = frames.latest()?.jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
         soundRequestJob = activity.lifecycleScope.launch {
+            // 절전 모드에서는 사진을 이때 새로 만든다(최대 1초).
+            val image = frames.fresh()?.jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
             val result = try {
                 withTimeout(AGENT_TIMEOUT_MS) { soundRequester.request(image, mode) }
             } catch (e: TimeoutCancellationException) {
@@ -462,31 +539,33 @@ class SeenarioController(
             show(TEXT_THINKING, speech = MSG_THINKING)
         }
         thinking = true
-        // 최신 카메라 사진(긴 변 768px JPEG). 카메라 준비 전이거나 권한이 없으면 null이라 사진 없이 보낸다.
-        // describe에 사진이 없으면 서버가 400 image_required를 주고, 아래에서 describe-scene으로 대신 묘사한다.
-        val jpeg = frames.latest()?.jpeg
-        val request = AgentRequest(
-            input = input,
-            inputType = type,
-            image = jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
-            history = Session.history.snapshot(),
-            soundMode = Session.soundMode,
-        )
-        if (BuildConfig.DEBUG) {
-            // 사진은 포함 여부와 크기만 남긴다.
-            val image = if (jpeg != null) "yes(${(jpeg.size + 1023) / 1024}KB)" else "no"
-            Log.d(
-                AGENT_TAG,
-                "request input_type=${type.wire}, sound_mode=${request.soundMode.wire}, " +
-                    "history=${request.history.size}, image=$image",
-            )
-        }
         val seq = soundActions.nextRequest()
-        // 에이전트와 대신 묘사를 합쳐 전체 대기 시간이 AGENT_TIMEOUT_MS를 넘지 않게 한다.
+        // 사진 받기, 에이전트, 대신 묘사를 합쳐 전체 대기 시간이 AGENT_TIMEOUT_MS를 넘지 않게 한다.
         val startMs = SystemClock.elapsedRealtime()
         activity.lifecycleScope.launch {
+            // 최신 카메라 사진(긴 변 768px JPEG). 절전 모드에서는 이때 새로 만든다(최대 1초).
+            // 카메라 준비 전이거나 권한이 없으면 null이라 사진 없이 보낸다.
+            // describe에 사진이 없으면 서버가 400 image_required를 주고, 아래에서 describe-scene으로 대신 묘사한다.
+            val jpeg = frames.fresh()?.jpeg
+            val request = AgentRequest(
+                input = input,
+                inputType = type,
+                image = jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
+                history = Session.history.snapshot(),
+                soundMode = Session.soundMode,
+            )
+            if (BuildConfig.DEBUG) {
+                // 사진은 포함 여부와 크기만 남긴다.
+                val image = if (jpeg != null) "yes(${(jpeg.size + 1023) / 1024}KB)" else "no"
+                Log.d(
+                    AGENT_TAG,
+                    "request input_type=${type.wire}, sound_mode=${request.soundMode.wire}, " +
+                        "history=${request.history.size}, image=$image, power_save=$powerSave",
+                )
+            }
             val response = try {
-                withTimeout(AGENT_TIMEOUT_MS) { agent.send(request) }
+                val leftMs = AGENT_TIMEOUT_MS - (SystemClock.elapsedRealtime() - startMs)
+                withTimeout(leftMs) { agent.send(request) }
             } catch (e: TimeoutCancellationException) {
                 // 시간을 다 썼으므로 대신 묘사 없이 바로 실패로 끝낸다.
                 Log.w(AGENT_TAG, "에이전트 응답 시간 초과", e)
@@ -678,6 +757,9 @@ class SeenarioController(
         const val AGENT_TIMEOUT_MS = 20_000L
         const val SPEECH_WAIT_MS = 15_000L
 
+        /** 절전 모드의 화면 밝기(0~1). 0은 기기에 따라 화면을 완전히 끌 수 있어 조금 남긴다. */
+        const val MIN_BRIGHTNESS = 0.01f
+
         /** 말이 끝나고 이만큼 조용하면 소리 볼륨을 되돌린다. */
         const val UNDUCK_DELAY_MS = 500L
 
@@ -724,7 +806,7 @@ class SeenarioController(
 
 /**
  * 씨나리오 메인 화면.
- * - 배경: 카메라 미리보기 전체
+ * - 배경: 카메라 미리보기 전체(절전 모드에서는 검은 화면)
  * - 위쪽: 상태와 마지막으로 인식한 말
  * - 아래쪽: 묘사 결과
  * 화면 어디를 탭해도(TalkBack에서는 두 번 탭) 듣기를 시작한다. 탭은 이 화면에서만 처리한다.
@@ -757,6 +839,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
                 onDescribed = controller::onDescribed,
                 onError = controller::onDescribeFailed,
                 latestFrames = controller.frames,
+                powerSave = controller.powerSave,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -804,6 +887,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
         StatusPanel(
             status = controller.status,
             soundMode = controller.soundMode,
+            powerSave = controller.powerSave,
             lastHeard = voiceState.lastHeard,
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -836,6 +920,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
 private fun StatusPanel(
     status: SeenarioStatus,
     soundMode: SoundMode,
+    powerSave: Boolean,
     lastHeard: String?,
     modifier: Modifier = Modifier,
 ) {
@@ -860,6 +945,16 @@ private fun StatusPanel(
             color = Color.White,
             modifier = Modifier.semantics { contentDescription = "현재 소리 모드: ${soundMode.label}" },
         )
+        if (powerSave) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "절전 모드",
+                fontSize = 20.sp,
+                lineHeight = 28.sp,
+                color = Color.White,
+                modifier = Modifier.semantics { contentDescription = "절전 모드 켜짐. 카메라 화면을 끄고 배터리를 아끼는 중" },
+            )
+        }
         if (lastHeard != null) {
             Spacer(Modifier.height(6.dp))
             Text(

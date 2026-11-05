@@ -15,5 +15,9 @@ enum class VoiceCommand {
     RESET,
     SAVE,
     REPEAT,
+    /** 절전 모드 켜기(미리보기 끄기, 사진은 요청할 때만). */
+    POWER_SAVE_ON,
+    /** 절전 모드 끄기. */
+    POWER_SAVE_OFF,
     UNKNOWN,
 }

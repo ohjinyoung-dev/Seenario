@@ -223,6 +223,8 @@ class VoiceController(
             VoiceCommand.RESET -> listener.onResetRequested()
             VoiceCommand.SAVE -> tts.speak("저장 명령을 받았어요")
             VoiceCommand.REPEAT -> listener.onRepeatRequested()
+            VoiceCommand.POWER_SAVE_ON -> listener.onPowerSaveRequested(true)
+            VoiceCommand.POWER_SAVE_OFF -> listener.onPowerSaveRequested(false)
             VoiceCommand.UNKNOWN -> if (!heard.isNullOrBlank()) listener.onSpeechInput(heard)
         }
     }

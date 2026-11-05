@@ -11,6 +11,8 @@ package com.buzzerbeater.seenario.voice
  *   예: "조용히", "조용히 해줘", "기본으로", "기본으로 돌아가" → SOUND_OFF.
  *   "여기 조용히 해야 하는 곳이야?" → 다른 규칙도 없으면 UNKNOWN(에이전트로 보냄).
  * - "묘사 저장해줘"는 SAVE, "다시 묘사해줘"는 DESCRIBE가 된다.
+ * - "절전"/"절약"이 들어가면 가장 먼저 절전 모드 명령으로 본다. "꺼", "끄", "해제", "그만", "풀"이 같이 있으면 끄기.
+ *   예: "절전 모드 켜", "배터리 절약 모드" → POWER_SAVE_ON, "절전 모드 꺼줘" → POWER_SAVE_OFF.
  * - 어느 규칙에도 맞지 않으면 UNKNOWN이고, 이 말은 에이전트에 대화로 보낸다.
  */
 object CommandParser {
@@ -33,6 +35,13 @@ object CommandParser {
     fun parse(text: String): VoiceCommand {
         val normalized = text.filterNot { it.isWhitespace() }.lowercase()
         if (normalized.isEmpty()) return VoiceCommand.UNKNOWN
+        if (POWER_SAVE_KEYWORDS.any { normalized.contains(it) }) {
+            return if (POWER_SAVE_OFF_KEYWORDS.any { normalized.contains(it) }) {
+                VoiceCommand.POWER_SAVE_OFF
+            } else {
+                VoiceCommand.POWER_SAVE_ON
+            }
+        }
         if (BASIC_MODE_COMMANDS.any { it.matches(normalized) }) return VoiceCommand.SOUND_OFF
         return rules.firstOrNull { (_, keywords) -> keywords.any { normalized.contains(it) } }
             ?.first
@@ -47,6 +56,9 @@ object CommandParser {
         Regex("""(소리)?(좀)?조용히(좀)?(해|해줘|해주세요|해줄래|하자)?[.!~]*"""),
         Regex("""(소리)?(좀)?기본으로(돌아가|돌아가줘|돌아가자|돌려|돌려줘|바꿔|바꿔줘|바꿔주세요|가|가줘|가자|해|해줘)?[.!~]*"""),
     )
+
+    private val POWER_SAVE_KEYWORDS = listOf("절전", "절약")
+    private val POWER_SAVE_OFF_KEYWORDS = listOf("꺼", "끄", "해제", "그만", "풀")
 
     /** 인식기의 후보 문장들(N-best) 중 UNKNOWN이 아닌 첫 결과를 고른다. */
     fun parse(candidates: List<String>): VoiceCommand =
