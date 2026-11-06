@@ -1,8 +1,7 @@
 // Gemini generateContent 호출 공용 코드 (describe-scene, seenario-agent에서 같이 쓴다).
 // - Gemini API 키는 Edge Function secret에만 둔다. 앱에는 절대 넣지 않는다.
 //   키마다 secret을 따로 둔다: GEMINI_API_KEY_<이름> 또는 GEMINI_KEY_<이름>(예: GEMINI_API_KEY_OJY1).
-//   이름(ojy1)만 DB와 로그에 남는다.
-//   처음 등록한 secret GEMINI_API_KEY도 이름 default로 함께 돌려쓴다.
+//   이름(ojy1)만 DB와 로그에 남는다. 이름이 없는 GEMINI_API_KEY는 쓰지 않는다.
 // - 키는 모델마다 오늘(태평양 시간) 덜 쓴 것부터 쓴다. 한도 초과(429)나 키 오류면 같은 모델을 다른 키로 바로 다시 부른다.
 // - 모델 후보는 secret GEMINI_MODELS(쉼표로 구분, 앞에서부터 먼저 부름)로 바꿀 수 있다. 없으면 DEFAULT_MODELS.
 //   무료 한도는 모델마다 따로라서, 한도가 넉넉한 모델을 앞에 두고 한도가 작은 모델은 뒤에 둔다.
@@ -17,7 +16,7 @@ import { loadStatus, type ModelPlan, planAttempts, recordOutcome, skipRuleFor, S
 type GeminiKey = { name: string; key: string };
 const KEY_PREFIXES = ["GEMINI_API_KEY_", "GEMINI_KEY_"];
 
-/** secret GEMINI_API_KEY_<이름>, GEMINI_KEY_<이름>, GEMINI_API_KEY(이름 default)를 모두 읽는다. */
+/** secret GEMINI_API_KEY_<이름>, GEMINI_KEY_<이름>을 모두 읽는다. 같은 이름이면 하나만 쓴다. */
 function loadKeys(): GeminiKey[] {
   let env: Record<string, string> = {};
   try {
@@ -30,9 +29,6 @@ function loadKeys(): GeminiKey[] {
     const prefix = KEY_PREFIXES.find((p) => name.startsWith(p) && name.length > p.length);
     if (prefix && value.trim()) byName.set(name.slice(prefix.length).toLowerCase(), value.trim());
   }
-  // 처음 등록한 GEMINI_API_KEY도 이름 default로 함께 쓴다(같은 키 값이 다른 이름으로 이미 있으면 한 번만).
-  const legacy = Deno.env.get("GEMINI_API_KEY")?.trim();
-  if (legacy && !byName.has("default") && ![...byName.values()].includes(legacy)) byName.set("default", legacy);
   return [...byName].map(([name, key]) => ({ name, key })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
