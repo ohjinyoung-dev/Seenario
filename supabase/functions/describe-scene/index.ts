@@ -1,12 +1,12 @@
 // 카메라 프레임 1장을 받아 Gemini로 풍경을 라디오처럼 묘사한 한국어 문장을 돌려준다.
-// - Gemini API 키는 Edge Function secret(GEMINI_API_KEY)에만 둔다. 앱에는 절대 넣지 않는다.
+// - Gemini API 키는 Edge Function secret(GEMINI_API_KEY_<이름>, _shared/gemini.ts 참고)에만 둔다. 앱에는 절대 넣지 않는다.
 // - 이미지는 묘사에만 쓰고 저장하지 않는다.
 // - 로그인한(익명 포함) 사용자만 호출할 수 있다.
 // - 사용자의 sound_mode가 ambient(환경음)/music(배경음악)이면 분위기 태그도 함께 받아
 //   sounds 테이블에서 가장 잘 맞는 음원을 골라 재생 URL을 같이 돌려준다. off(기본)면 묘사만 돌려준다.
 
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { callGemini, extractText, GEMINI_API_KEY, parseJsonText } from "../_shared/gemini.ts";
+import { callGemini, extractText, HAS_GEMINI_KEY, parseJsonText } from "../_shared/gemini.ts";
 import { isSignedIn, json, userClient } from "../_shared/http.ts";
 import { pickSound, SOUND_MODES, type SoundMode } from "../_shared/sound_pick.ts";
 import { normalizeTags, SOUND_TAG_KEYS, SOUND_TAGS, type SoundTag } from "../_shared/sound_tags.ts";
@@ -60,7 +60,7 @@ const TOTAL_DEADLINE_MS = 34_000; // 앱의 요청 제한(40초)보다 짧게
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-  if (!GEMINI_API_KEY) return json({ error: "server_not_configured" }, 500);
+  if (!HAS_GEMINI_KEY) return json({ error: "server_not_configured" }, 500);
 
   // 호출자 확인 (익명 로그인 사용자도 허용)
   // 사용자 토큰을 실어 보내 RLS가 이 사용자 기준으로 적용되게 한다.

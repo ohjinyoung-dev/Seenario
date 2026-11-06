@@ -1,5 +1,5 @@
 // 씨나리오 에이전트. 앱 ↔ 에이전트 약속(CLAUDE.md) 형식으로 요청을 받아 { speech, display, actions }를 돌려준다.
-// - AI는 Gemini만 쓴다. API 키는 Edge Function secret(GEMINI_API_KEY)에만 둔다.
+// - AI는 Gemini만 쓴다. API 키는 Edge Function secret(GEMINI_API_KEY_<이름>, _shared/gemini.ts 참고)에만 둔다.
 // - describe("묘사해줘"): 반복 없이 사진 → Gemini 1번 → 묘사. 사진이 없으면 400(앱이 describe-scene으로 대신 묘사).
 // - speech(그 밖의 말): 생각 → 도구 사용 → 판단을 최대 3번 반복한 뒤 답한다.
 // - sound(소리 모드를 켤 때): 묘사 없이 사진 → Gemini 1번 → 곡 고르기. speech/display는 빈 문자열.
@@ -7,7 +7,7 @@
 // - 사진은 요청 처리에만 쓰고 저장하지 않는다. 로그에도 사진과 사용자 말 전문은 남기지 않는다.
 // - 로그인한(익명 포함) 사용자만 호출할 수 있다.
 
-import { GEMINI_API_KEY } from "../_shared/gemini.ts";
+import { HAS_GEMINI_KEY } from "../_shared/gemini.ts";
 import { isSignedIn, json, userClient } from "../_shared/http.ts";
 import { describe } from "./describe.ts";
 import { soundOnly } from "./sound_request.ts";
@@ -59,7 +59,7 @@ function parseRequest(body: any): AgentRequest {
 Deno.serve(async (req) => {
   const started = Date.now();
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-  if (!GEMINI_API_KEY) return json({ error: "server_not_configured" }, 500);
+  if (!HAS_GEMINI_KEY) return json({ error: "server_not_configured" }, 500);
 
   const client = userClient(req);
   if (!client) return json({ error: "unauthorized" }, 401);
