@@ -209,17 +209,63 @@ set tags = array_cat(tags, array['indoor','busy'])
 where file_path = 'music/joplin-entertainer.mp3';
 
 -- ---------------------------------------------------------------------------
--- gemini_model_status (Gemini 모델 건너뛰기 기록, _shared/model_status.ts가 읽고 쓴다)
--- - 과부하(503/500/504)·응답 없음(slow)·시간 초과(timeout)는 10분, 한도 초과(quota)는 Google이 알려 준 시간까지.
+-- gemini_model_status (Gemini 키·모델별 건너뛰기 기록 + 오늘 사용량, _shared/model_status.ts가 읽고 쓴다)
+-- - 한 줄 = 키 하나 × 모델 하나. key_name은 secret 이름(GEMINI_KEY_<이름>)에서 온 이름이고, 키 값은 절대 넣지 않는다.
+-- - key_name '*'은 "모든 키"(모델 자체가 과부하·느림), model '*'은 "모든 모델"(키가 잘못됨)이다.
+-- - 건너뛰기: 과부하(503/500/504)·응답 없음(slow)·시간 초과(timeout)는 모델 전체('*') 10분,
+--   한도 초과(quota, 429)는 그 키×모델만 Google이 알려 준 시간까지, 키 오류(key_error, 401/403/잘못된 키)는 그 키 전체 1시간.
+--   건너뛰지 않을 때는 skip_until/reason이 null이다.
+-- - 사용량: usage_day(태평양 시간 날짜, Google 하루 한도 기준) 하루치 성공 요청 수와 토큰 수만 둔다.
+--   날짜가 바뀐 뒤 처음 성공하면 0부터 다시 센다. 더하기는 gemini_record_usage()로만 한다(동시 요청에도 정확하게).
 -- - 모든 Edge Function 인스턴스가 함께 보도록 DB에 둔다.
 -- - RLS만 켜고 정책은 만들지 않는다: 앱(anon/authenticated)은 접근 불가, Edge Function은 service role로 접근.
 -- ---------------------------------------------------------------------------
 create table if not exists public.gemini_model_status (
-    model       text primary key,
-    skip_until  timestamptz not null,
-    reason      text not null check (reason in ('overloaded', 'slow', 'timeout', 'quota')),
-    last_status text,
-    last_ms     integer,
-    updated_at  timestamptz not null default now()
+    key_name      text not null default '*',
+    model         text not null,
+    skip_until    timestamptz,
+    reason        text check (reason in ('overloaded', 'slow', 'timeout', 'quota', 'key_error')),
+    last_status   text,
+    last_ms       integer,
+    usage_day     date not null default (now() at time zone 'America/Los_Angeles')::date,
+    requests      integer not null default 0,
+    prompt_tokens bigint not null default 0,
+    output_tokens bigint not null default 0,
+    updated_at    timestamptz not null default now(),
+    primary key (key_name, model)
 );
 alter table public.gemini_model_status enable row level security;
+
+-- 성공한 요청 1번을 기록한다: 오늘 사용량을 더하고(날짜가 바뀌었으면 새로 시작), 그 키×모델과 모델 전체('*')의 건너뛰기를 푼다.
+create or replace function public.gemini_record_usage(
+    p_key_name text,
+    p_model text,
+    p_usage_day date,
+    p_prompt_tokens bigint,
+    p_output_tokens bigint,
+    p_ms integer
+) returns void
+language sql
+set search_path = ''
+as $$
+    insert into public.gemini_model_status as s
+        (key_name, model, usage_day, requests, prompt_tokens, output_tokens, last_status, last_ms, updated_at)
+    values (p_key_name, p_model, p_usage_day, 1, p_prompt_tokens, p_output_tokens, '200', p_ms, now())
+    on conflict (key_name, model) do update set
+        requests      = case when s.usage_day = excluded.usage_day then s.requests + 1 else 1 end,
+        prompt_tokens = case when s.usage_day = excluded.usage_day then s.prompt_tokens + excluded.prompt_tokens
+                             else excluded.prompt_tokens end,
+        output_tokens = case when s.usage_day = excluded.usage_day then s.output_tokens + excluded.output_tokens
+                             else excluded.output_tokens end,
+        usage_day     = excluded.usage_day,
+        skip_until    = null,
+        reason        = null,
+        last_status   = '200',
+        last_ms       = excluded.last_ms,
+        updated_at    = now();
+    update public.gemini_model_status
+    set skip_until = null, reason = null, updated_at = now()
+    where key_name = '*' and model = p_model and skip_until is not null;
+$$;
+revoke execute on function public.gemini_record_usage(text, text, date, bigint, bigint, integer) from public, anon, authenticated;
+grant execute on function public.gemini_record_usage(text, text, date, bigint, bigint, integer) to service_role;
