@@ -85,6 +85,7 @@ Deno.test("하루 한도 429는 다음 태평양 자정까지 건너뛴다", () 
 Deno.test("401, 403, 잘못된 키 400은 그 키 전체를 1시간 건너뛴다", () => {
   const cases = [
     { status: 401, body: "" },
+    { status: 402, body: "prepayment credits are depleted" },
     { status: 403, body: "PERMISSION_DENIED" },
     { status: 400, body: '{"error":{"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT"}}' },
   ];

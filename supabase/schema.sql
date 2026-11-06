@@ -213,7 +213,7 @@ where file_path = 'music/joplin-entertainer.mp3';
 -- - 한 줄 = 키 하나 × 모델 하나. key_name은 secret 이름(GEMINI_KEY_<이름>)에서 온 이름이고, 키 값은 절대 넣지 않는다.
 -- - key_name '*'은 "모든 키"(모델 자체가 과부하·느림), model '*'은 "모든 모델"(키가 잘못됨)이다.
 -- - 건너뛰기: 과부하(503/500/504)·응답 없음(slow)·시간 초과(timeout)는 모델 전체('*') 10분,
---   한도 초과(quota, 429)는 그 키×모델만 Google이 알려 준 시간까지, 키 오류(key_error, 401/403/잘못된 키)는 그 키 전체 1시간.
+--   한도 초과(quota, 429)는 그 키×모델만 Google이 알려 준 시간까지, 키 오류(key_error, 401/402/403/잘못된 키)는 그 키 전체 1시간.
 --   건너뛰지 않을 때는 skip_until/reason이 null이다.
 -- - 사용량: usage_day(태평양 시간 날짜, Google 하루 한도 기준) 하루치 성공 요청 수와 토큰 수만 둔다.
 --   날짜가 바뀐 뒤 처음 성공하면 0부터 다시 센다. 더하기는 gemini_record_usage()로만 한다(동시 요청에도 정확하게).

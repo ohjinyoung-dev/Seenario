@@ -4,7 +4,7 @@
 // - 건너뛰는 범위와 기간:
 //   과부하(503/500/504)·응답 없음(slow)·시간 초과(timeout) → 모델 전체(모든 키) 10분. 모델 자체가 바쁜 것이라 키를 바꿔도 같다.
 //   한도 초과(429) → 그 키×모델만 Google이 알려 준 시간까지(하루 한도면 태평양 자정까지).
-//   키 오류(401/403/잘못된 키) → 그 키의 모든 모델 1시간.
+//   키 오류(401/402 결제·크레딧/403/잘못된 키) → 그 키의 모든 모델 1시간.
 // - 사용량은 태평양 시간 날짜(Google 하루 한도 기준)의 하루치만 둔다. 성공한 요청만 센다.
 //   키는 모델마다 오늘 요청 수가 가장 적은 것부터 쓴다(같으면 무작위).
 // - 기록은 테이블 public.gemini_model_status에 두어 모든 함수 인스턴스가 함께 본다(인스턴스 메모리는 캐시로만 쓴다).
@@ -112,7 +112,7 @@ export function skipRuleFor(outcome: Outcome, now: number): SkipRule | "clear" |
       if (status === 429) {
         return { scope: "pair", until: quotaUntil(body, now), reason: "quota", lastStatus: "429" };
       }
-      if (status === 401 || status === 403 || (status === 400 && KEY_ERROR_BODY.test(body))) {
+      if (status === 401 || status === 402 || status === 403 || (status === 400 && KEY_ERROR_BODY.test(body))) {
         return { scope: "key", until: now + KEY_ERROR_SKIP_MS, reason: "key_error", lastStatus: String(status) };
       }
       if (OVERLOADED_STATUS.has(status)) {
