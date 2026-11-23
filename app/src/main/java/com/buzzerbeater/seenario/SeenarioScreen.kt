@@ -53,7 +53,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -97,6 +102,7 @@ import com.buzzerbeater.seenario.sound.SoundLog
 import com.buzzerbeater.seenario.sound.SoundNoticeStorage
 import com.buzzerbeater.seenario.sound.SoundModePolicy
 import com.buzzerbeater.seenario.sound.SoundModeStore
+import com.buzzerbeater.seenario.sound.SoundModeSwipe
 import com.buzzerbeater.seenario.sound.SoundPlayer
 import com.buzzerbeater.seenario.sound.SoundRequester
 import com.buzzerbeater.seenario.voice.TalkBackSpeechMonitor
@@ -124,6 +130,12 @@ private const val LONG_PRESS_DESCRIBE_MS = 1_000L
 
 /** 길게 눌러 바로 묘사할 때 진동 길이. */
 private const val LONG_PRESS_VIBRATION_MS = 150L
+
+/** 가로로 밀어 소리 모드를 바꿀 때 진동 길이(길게 누르기보다 짧게). */
+private const val SWIPE_VIBRATION_MS = 60L
+
+/** 손가락이 이 안에서만 움직이면 탭이나 길게 누르기로 본다(손 떨림 허용, 손끝 너비 정도). */
+private val TAP_TOLERANCE = 32.dp
 
 /** 진동 세기 최댓값(1~255). */
 private const val MAX_AMPLITUDE = 255
@@ -407,11 +419,28 @@ class SeenarioController(
      * 진동 용도를 접근성으로 지정해서 울린다.
      */
     fun onLongPressDescribe() {
-        vibrate()
+        vibrate(LONG_PRESS_VIBRATION_MS)
         onDescribeRequested()
     }
 
-    private fun vibrate() {
+    /**
+     * 화면을 가로로 밀었을 때(방향 상관없음). 짧게 진동하고 다음 소리 모드로 바꾼다(기본 → 환경음 → 배경음 → 기본).
+     * 말로 바꿀 때와 같은 [changeSoundMode]를 쓰되, 빠르게 여러 번 넘길 때 요청이 쌓이지 않도록
+     * 소리 요청은 마지막 스와이프 뒤 [SoundModeSwipe.REQUEST_DELAY_MS]가 지나면 한 번만 보낸다.
+     * 듣는 중에는 모드 안내가 마이크에 섞이므로 무시한다.
+     */
+    fun onSwipeSoundMode() {
+        if (voice.uiState.status == VoiceStatus.LISTENING) {
+            Log.d(TAG, "스와이프 무시: 듣는 중")
+            return
+        }
+        vibrate(SWIPE_VIBRATION_MS)
+        val next = SoundModeSwipe.next(Session.soundMode)
+        Log.d(TAG, "스와이프 → ${next.wire}")
+        changeSoundMode(next, soundRequestDelayMs = SoundModeSwipe.REQUEST_DELAY_MS)
+    }
+
+    private fun vibrate(durationMs: Long) {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             activity.getSystemService(VibratorManager::class.java)?.defaultVibrator
         } else {
@@ -420,7 +449,7 @@ class SeenarioController(
         if (vibrator?.hasVibrator() != true) return
         // 세기를 조절할 수 있는 기기면 최대 세기로, 아니면 기본 세기로 울린다.
         val amplitude = if (vibrator.hasAmplitudeControl()) MAX_AMPLITUDE else VibrationEffect.DEFAULT_AMPLITUDE
-        val effect = VibrationEffect.createOneShot(LONG_PRESS_VIBRATION_MS, amplitude)
+        val effect = VibrationEffect.createOneShot(durationMs, amplitude)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ACCESSIBILITY))
         } else {
@@ -480,8 +509,9 @@ class SeenarioController(
     /**
      * 소리 모드를 바꾸고 TTS로 알린 뒤, 지난 모드(휴대폰)와 user_settings.sound_mode(DB)에 저장한다.
      * 이미 같은 환경음/배경음 모드면 모드 안내 없이 지금 장면으로 소리 요청만 다시 보낸다.
+     * [soundRequestDelayMs]만큼 기다렸다가 소리 요청을 보낸다(스와이프용. 말로 바꿀 때는 바로).
      */
-    private fun changeSoundMode(mode: SoundMode) {
+    private fun changeSoundMode(mode: SoundMode, soundRequestDelayMs: Long = 0L) {
         val old = Session.soundMode
         val plan = SoundFeedbackPolicy.planModeCommand(old, mode)
         Session.soundModeChangedByUser = true
@@ -495,7 +525,7 @@ class SeenarioController(
             voice.speak(if (plan.requestSound && !soundNoticeDone) "$notice $MSG_SOUND_SAFETY" else notice)
         }
         if (plan.sameModeAgain) SoundLog.d("같은 모드 다시 요청: ${mode.wire} (모드 안내 없이 소리 요청을 다시 보냄)")
-        if (plan.requestSound) requestSound(mode) else cancelSoundRequest("기본 모드로 바뀜")
+        if (plan.requestSound) requestSound(mode, soundRequestDelayMs) else cancelSoundRequest("기본 모드로 바뀜")
         activity.lifecycleScope.launch { lastSoundMode.record(mode) }
         saveSoundModeToDb(mode)
     }
@@ -517,12 +547,14 @@ class SeenarioController(
      * 소리 모드를 켤 때(같은 모드를 다시 켤 때 포함) 조용한 소리 요청을 보낸다.
      * "생각하는 중"으로 바꾸지 않아서 사용자는 바로 다른 말을 할 수 있다.
      * 응답의 speech는 읽지 않고 actions만 실행한다. 소리를 못 골랐거나 요청이 실패하면 [announceSoundOutcome]이 알린다.
+     * [delayMs]가 있으면 그만큼 기다렸다가 보낸다. 기다리는 동안 모드가 또 바뀌면 이 요청은 취소된다.
      */
-    private fun requestSound(mode: SoundMode) {
+    private fun requestSound(mode: SoundMode, delayMs: Long = 0L) {
         cancelSoundRequest("새 소리 요청")
-        val seq = soundActions.nextRequest()
-        val conversationsAtRequest = conversationCount
         soundRequestJob = activity.lifecycleScope.launch {
+            if (delayMs > 0) delay(delayMs)
+            val seq = soundActions.nextRequest()
+            val conversationsAtRequest = conversationCount
             // 절전 모드에서는 사진을 이때 새로 만든다(최대 1초).
             val image = frames.fresh()?.jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
             val result = try {
@@ -902,24 +934,36 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
 
         // 탭 영역은 글자 아래에 깔아서, 글자 위를 눌러도 여기로 온다.
         // 짧게 누르면 듣기, 1초 이상 누르고 있으면 손을 떼기 전에 바로 묘사(진동으로 알림).
+        // 손가락이 TAP_TOLERANCE 안에서만 움직여야 탭/길게 누르기다. 그보다 많이 움직이면 길게 누르기는 취소되고,
+        // 손을 뗐을 때 가로로 충분히 밀었으면 다음 소리 모드로 바꾸고, 아니면(애매한 움직임) 아무것도 하지 않는다.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(controller) {
+                    val tapTolerance = TAP_TOLERANCE.toPx()
                     awaitEachGesture {
-                        awaitFirstDown()
-                        var cancelled = false
-                        val up = withTimeoutOrNull(LONG_PRESS_DESCRIBE_MS) {
-                            waitForUpOrCancellation().also { if (it == null) cancelled = true }
+                        val down = awaitFirstDown()
+                        val start = down.position
+                        val press = withTimeoutOrNull(LONG_PRESS_DESCRIBE_MS) {
+                            awaitUpOrMove(down.id, start, tapTolerance)
                         }
-                        when {
-                            up != null -> {
-                                up.consume()
+                        when (press) {
+                            is Press.Up -> {
+                                press.change.consume()
                                 controller.voice.onTriggerPressed()
                             }
-                            // 1초 전에 취소(손가락이 화면 밖으로 나감 등)되면 아무것도 하지 않는다.
-                            cancelled -> Unit
-                            else -> {
+                            // 1초 전에 취소되면 아무것도 하지 않는다.
+                            Press.Cancelled -> Unit
+                            Press.Moved -> {
+                                val end = awaitRelease(down.id) ?: return@awaitEachGesture
+                                val delta = end - start
+                                val touch = SoundModeSwipe.classify(delta.x, delta.y, size.width.toFloat(), tapTolerance)
+                                if (BuildConfig.DEBUG) {
+                                    Log.d(TAG, "화면 움직임: $touch (dx=${delta.x.toInt()}, dy=${delta.y.toInt()}, 너비=${size.width})")
+                                }
+                                if (touch == SoundModeSwipe.Touch.SWIPE) controller.onSwipeSoundMode()
+                            }
+                            null -> {
                                 controller.onLongPressDescribe()
                                 waitForUpOrCancellation()?.consume()
                             }
@@ -1021,5 +1065,39 @@ private fun StatusPanel(
                 modifier = Modifier.semantics { contentDescription = "마지막으로 인식한 말: $lastHeard" },
             )
         }
+    }
+}
+
+/** 누른 뒤 1초 안에 일어난 일. */
+private sealed interface Press {
+    /** 탭 허용 범위 안에서 손을 뗐다. */
+    data class Up(val change: PointerInputChange) : Press
+
+    /** 손가락이 탭 허용 범위를 벗어났다(탭도 길게 누르기도 아님). */
+    data object Moved : Press
+
+    /** 다른 곳에서 터치를 가져갔다. */
+    data object Cancelled : Press
+}
+
+/** 손가락 [id]가 떼지거나 [start]에서 [tolerance]보다 멀리 움직일 때까지 기다린다. */
+private suspend fun AwaitPointerEventScope.awaitUpOrMove(id: PointerId, start: Offset, tolerance: Float): Press {
+    while (true) {
+        val change = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: return Press.Cancelled
+        if (change.changedToUp()) return Press.Up(change)
+        if (change.isConsumed) return Press.Cancelled
+        if ((change.position - start).getDistance() > tolerance) return Press.Moved
+    }
+}
+
+/** 손가락 [id]를 뗄 때까지 기다려 뗀 위치를 돌려준다. 다른 곳에서 터치를 가져가면 null. */
+private suspend fun AwaitPointerEventScope.awaitRelease(id: PointerId): Offset? {
+    while (true) {
+        val change = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: return null
+        if (change.changedToUp()) {
+            change.consume()
+            return change.position
+        }
+        if (change.isConsumed) return null
     }
 }
