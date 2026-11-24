@@ -9,6 +9,26 @@ class CommandParserTest {
         assertEquals("\"$text\"", expected, CommandParser.parse(text))
 
     @Test
+    fun describeModes() {
+        // 기본 모드(= 심플 모드)
+        assertCommand(VoiceCommand.SOUND_OFF, "기본 모드")
+        assertCommand(VoiceCommand.SOUND_OFF, "심플 모드")
+        assertCommand(VoiceCommand.SOUND_OFF, "심플 모드로 바꿔줘")
+        assertCommand(VoiceCommand.SOUND_OFF, "간단 모드")
+        // 감성 모드
+        assertCommand(VoiceCommand.EMOTIONAL_MODE, "감성 모드")
+        assertCommand(VoiceCommand.EMOTIONAL_MODE, "감성모드로 바꿔줘")
+        // 길이를 말하며 묘사 요청
+        assertCommand(VoiceCommand.BRIEF_DESCRIBE, "간단하게 묘사해줘")
+        assertCommand(VoiceCommand.BRIEF_DESCRIBE, "간단히 묘사해 줘")
+        assertCommand(VoiceCommand.BRIEF_DESCRIBE, "짧게 말해줘")
+        assertCommand(VoiceCommand.DETAILED_DESCRIBE, "자세히 묘사해줘")
+        assertCommand(VoiceCommand.DETAILED_DESCRIBE, "자세하게 말해 줘")
+        // "간단"만 있는 말은 명령이 아니다.
+        assertCommand(VoiceCommand.UNKNOWN, "간단한 질문 하나 있어")
+    }
+
+    @Test
     fun describe() {
         assertCommand(VoiceCommand.DESCRIBE, "지금 풍경 묘사해줘")
         assertCommand(VoiceCommand.DESCRIBE, "묘사해 줘")

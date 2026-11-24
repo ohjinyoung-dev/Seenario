@@ -1,9 +1,10 @@
 // describe: 반복 없이 고정 순서로 처리한다. 사진 → Gemini 1번 → 묘사(+소리 모드면 태그로 곡 고르기 → play_sound).
+// detail이 brief(기본 모드)면 묘사를 1~2문장으로 짧게 한다.
 
 import { callGemini, extractText, parseJsonText } from "../_shared/gemini.ts";
 import type { SoundMode } from "../_shared/sound_pick.ts";
 import { SOUND_TAG_KEYS } from "../_shared/sound_tags.ts";
-import { describeInstruction, systemPrompt } from "./prompts.ts";
+import { briefDescribeInstruction, describeInstruction, systemPrompt } from "./prompts.ts";
 import { logPick, playAction } from "./sound_tools.ts";
 import { type AgentAction, type AgentContext, AgentError, type AgentResponse, EXISTING_SOUNDS, remainingMs } from "./types.ts";
 
@@ -34,7 +35,7 @@ export async function describe(ctx: AgentContext): Promise<AgentResponse> {
     contents: [{
       role: "user",
       parts: [
-        { text: describeInstruction(soundOn) },
+        { text: request.detail === "brief" ? briefDescribeInstruction(soundOn) : describeInstruction(soundOn) },
         { inline_data: { mime_type: "image/jpeg", data: request.image } },
       ],
     }],
@@ -57,7 +58,7 @@ export async function describe(ctx: AgentContext): Promise<AgentResponse> {
     console.error("describe empty response", result.model, text.slice(0, 200));
     throw new AgentError(502, "empty_response");
   }
-  console.log(`describe ok model=${result.model}`);
+  console.log(`describe ok model=${result.model} detail=${request.detail}`);
 
   const actions: AgentAction[] = [];
   if (soundOn) {

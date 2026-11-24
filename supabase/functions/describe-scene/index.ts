@@ -2,6 +2,7 @@
 // - Gemini API 키는 Edge Function secret(GEMINI_API_KEY_<이름>, _shared/gemini.ts 참고)에만 둔다. 앱에는 절대 넣지 않는다.
 // - 이미지는 묘사에만 쓰고 저장하지 않는다.
 // - 로그인한(익명 포함) 사용자만 호출할 수 있다.
+// - 본문의 detail이 "brief"(기본 모드)면 무엇이 있는지만 1~2문장으로 짧게 묘사한다(없으면 3~4문장).
 // - 사용자의 sound_mode가 ambient(환경음)/music(배경음악)이면 분위기 태그도 함께 받아
 //   sounds 테이블에서 가장 잘 맞는 음원을 골라 재생 URL을 같이 돌려준다. off(기본)면 묘사만 돌려준다.
 
@@ -20,6 +21,17 @@ const PROMPT = `너는 시각장애인을 위해 지금 눈앞의 풍경을 들�
 - 빛, 색감, 공간의 크기, 사물의 배치, 계절감이나 시간대처럼 분위기를 만드는 요소를 중심으로.
 - 사람이 있다면 외모를 평가하지 말고 무엇을 하고 있는지만 부드럽게 전해.
 - 발밑의 장애물처럼 안전에 중요한 것이 보이면 마지막에 짧게 알려 줘.
+- 사진이 너무 어둡거나 흐려서 알아보기 어렵다면 솔직하게 그렇다고 말해.
+- 목록, 기호, 이모지 없이 문장만 출력해.`;
+
+// 기본 모드(detail: "brief"): 분위기 대신 무엇이 있는지만 짧게.
+const BRIEF_PROMPT = `너는 시각장애인에게 지금 눈앞에 무엇이 있는지 짧게 알려 주는 안내자야.
+사진에 무엇이 있는지 한국어로 1~2문장만 말해 줘.
+
+- 어떤 장소인지와 눈에 띄는 주요 사물 위주로, 꾸밈말 없이 바로 말해.
+- 존댓말(해요체)로, 소리 내어 읽기 좋은 구어체로 말해.
+- 사람이 있다면 외모를 평가하지 말고 무엇을 하고 있는지만 전해.
+- 발밑의 장애물처럼 안전에 중요한 것이 보이면 그것을 먼저 말해.
 - 사진이 너무 어둡거나 흐려서 알아보기 어렵다면 솔직하게 그렇다고 말해.
 - 목록, 기호, 이모지 없이 문장만 출력해.`;
 
@@ -75,8 +87,9 @@ Deno.serve(async (req) => {
 
   let image: unknown;
   let mimeType: unknown;
+  let detail: unknown;
   try {
-    ({ image, mimeType } = await req.json());
+    ({ image, mimeType, detail } = await req.json());
   } catch {
     return json({ error: "invalid_json" }, 400);
   }
@@ -87,12 +100,13 @@ Deno.serve(async (req) => {
     return json({ error: "image_too_large" }, 413);
   }
   const mime = mimeType === "image/png" ? "image/png" : "image/jpeg";
+  const basePrompt = detail === "brief" ? BRIEF_PROMPT : PROMPT;
 
   const requestBody = {
     contents: [{
       role: "user",
       parts: [
-        { text: soundMode ? PROMPT + TAG_PROMPT : PROMPT },
+        { text: soundMode ? basePrompt + TAG_PROMPT : basePrompt },
         { inline_data: { mime_type: mime, data: image } },
       ],
     }],

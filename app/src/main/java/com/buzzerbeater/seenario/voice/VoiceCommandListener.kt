@@ -22,6 +22,15 @@ interface VoiceCommandListener {
     /** "환경음 모드" / "배경음 모드" / "소리 꺼". */
     fun onSoundModeRequested(mode: SoundMode) {}
 
+    /** "감성 모드": 감성 모드(소리 없이 3~4문장 묘사)로 바꾼다. */
+    fun onEmotionalModeRequested() {}
+
+    /**
+     * "간단하게 묘사해줘"([detailed] = false) / "자세히 묘사해줘"(true).
+     * 필요하면 기본 모드 / 감성 모드로 바꾸고 바로 묘사한다. [heard]는 인식한 문장.
+     */
+    fun onDescribeWithDetailRequested(detailed: Boolean, heard: String? = null) {}
+
     /** "소리 켜": 마지막으로 쓴 모드(없으면 환경음)로 켠다. */
     fun onSoundOnRequested() {}
 

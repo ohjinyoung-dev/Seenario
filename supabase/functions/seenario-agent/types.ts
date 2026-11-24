@@ -4,6 +4,8 @@ import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 
 export type InputType = "speech" | "describe" | "sound";
 export type SoundModeOrOff = "off" | "ambient" | "music";
+/** 묘사 길이. brief(기본 모드)면 1~2문장, full이면 3~4문장. describe에만 쓴다. */
+export type Detail = "brief" | "full";
 export type HistoryItem = { role: "user" | "agent"; text: string };
 
 export type AgentRequest = {
@@ -13,6 +15,8 @@ export type AgentRequest = {
   image?: string;
   history: HistoryItem[];
   sound_mode: SoundModeOrOff;
+  /** 없거나 모르는 값이면 full. */
+  detail: Detail;
 };
 
 export type AgentAction = {

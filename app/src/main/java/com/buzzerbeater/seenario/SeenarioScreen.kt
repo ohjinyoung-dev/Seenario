@@ -83,6 +83,7 @@ import com.buzzerbeater.seenario.agent.AgentClient
 import com.buzzerbeater.seenario.agent.AgentRequest
 import com.buzzerbeater.seenario.agent.AgentResponse
 import com.buzzerbeater.seenario.agent.ConversationHistory
+import com.buzzerbeater.seenario.agent.Detail
 import com.buzzerbeater.seenario.agent.InputType
 import com.buzzerbeater.seenario.agent.SoundMode
 import com.buzzerbeater.seenario.camera.CameraStreamScreen
@@ -140,6 +141,9 @@ private val TAP_TOLERANCE = 32.dp
 /** 진동 세기 최댓값(1~255). */
 private const val MAX_AMPLITUDE = 255
 
+/** 감성 모드(소리 없이 3~4문장 묘사)의 화면·TalkBack 이름. */
+private const val EMOTIONAL_MODE_LABEL = "감성 모드"
+
 /** 화면 위쪽에 보여 주는 상태. 음성 상태([VoiceStatus])에 "생각하는 중"을 더했다. */
 enum class SeenarioStatus(val label: String) {
     IDLE("대기 중"),
@@ -155,8 +159,17 @@ private object Session {
     /** 에이전트에 같이 보내는 최근 대화 기록. "처음부터"라고 하면 지운다. */
     val history = ConversationHistory()
 
-    /** 지금 소리 모드. 앱을 켜면 항상 기본 모드(off)로 시작한다. */
+    /** 지금 소리 모드. 앱을 켜면 항상 기본 모드(off, 1~2문장 묘사)로 시작한다. */
     var soundMode by mutableStateOf(SoundMode.OFF)
+
+    /**
+     * 감성 모드인지(소리 모드는 off이고 3~4문장으로 감성 묘사). [soundMode]가 OFF일 때만 true다.
+     * false이고 OFF면 기본 모드(심플, 1~2문장)다. 저장하지 않으므로 앱을 다시 켜면 기본 모드다.
+     */
+    var emotional by mutableStateOf(false)
+
+    /** 기본 모드(심플)인지. 이때만 묘사를 1~2문장(detail brief)으로 받는다. */
+    val brief: Boolean get() = soundMode == SoundMode.OFF && !emotional
 
     /**
      * 사용자가 말로 고른 절전 모드("절전 모드 켜/꺼"). null이면 휴대폰 절전 모드를 따른다.
@@ -208,7 +221,7 @@ class SeenarioController(
         },
     )
     val trigger = DescribeTrigger()
-    val describer = SceneDescriber(SupabaseProvider.client)
+    val describer = SceneDescriber(SupabaseProvider.client, brief = { Session.brief })
 
     /** 카메라 화면이 채우는 최신 프레임. 에이전트 요청에 사진으로 넣는다. */
     val frames = LatestFrameProvider()
@@ -265,6 +278,9 @@ class SeenarioController(
 
     /** 지금 소리 모드. 화면 위쪽에 보여 준다. */
     val soundMode: SoundMode get() = Session.soundMode
+
+    /** 지금 감성 모드인지. 화면 위쪽에 보여 준다. */
+    val emotional: Boolean get() = Session.emotional
 
     /** 아래쪽에 보여 줄 텍스트. null이면 사용 안내를 보여 준다. */
     var resultText by mutableStateOf<String?>(null)
@@ -424,7 +440,7 @@ class SeenarioController(
     }
 
     /**
-     * 화면을 가로로 밀었을 때(방향 상관없음). 짧게 진동하고 다음 소리 모드로 바꾼다(기본 → 환경음 → 배경음 → 기본).
+     * 화면을 가로로 밀었을 때(방향 상관없음). 짧게 진동하고 다음 모드로 바꾼다(기본 → 감성 → 환경음 → 배경음 → 기본).
      * 말로 바꿀 때와 같은 [changeSoundMode]를 쓰되, 빠르게 여러 번 넘길 때 요청이 쌓이지 않도록
      * 소리 요청은 마지막 스와이프 뒤 [SoundModeSwipe.REQUEST_DELAY_MS]가 지나면 한 번만 보낸다.
      * 듣는 중에는 모드 안내가 마이크에 섞이므로 무시한다.
@@ -435,9 +451,9 @@ class SeenarioController(
             return
         }
         vibrate(SWIPE_VIBRATION_MS)
-        val next = SoundModeSwipe.next(Session.soundMode)
-        Log.d(TAG, "스와이프 → ${next.wire}")
-        changeSoundMode(next, soundRequestDelayMs = SoundModeSwipe.REQUEST_DELAY_MS)
+        val next = SoundModeSwipe.next(SoundModeSwipe.Mode(Session.soundMode, Session.emotional))
+        Log.d(TAG, "스와이프 → ${next.soundMode.wire}${if (next.emotional) " (감성)" else ""}")
+        changeSoundMode(next.soundMode, emotional = next.emotional, soundRequestDelayMs = SoundModeSwipe.REQUEST_DELAY_MS)
     }
 
     private fun vibrate(durationMs: Long) {
@@ -490,6 +506,29 @@ class SeenarioController(
 
     override fun onSoundModeRequested(mode: SoundMode) = changeSoundMode(mode)
 
+    /** "감성 모드": 감성 모드(소리 없이 3~4문장 묘사)로 바꾼다. 묘사는 하지 않는다. */
+    override fun onEmotionalModeRequested() = changeSoundMode(SoundMode.OFF, emotional = true)
+
+    /**
+     * "간단하게 묘사해줘"([detailed] = false) / "자세히 묘사해줘"(true). 필요하면 모드를 바꾸고 바로 묘사한다.
+     * - 간단하게: 기본 모드가 아니면(감성·환경음·배경음) 기본 모드로 바꾼다(소리도 멈춘다).
+     * - 자세히: 기본 모드면 감성 모드로 바꾼다. 환경음·배경음은 이미 자세한 묘사라서 모드를 그대로 둔다.
+     * 모드를 바꿨으면 모드 안내와 "살펴볼게요"를 한 번에 읽는다(따로 읽으면 뒤 말이 앞 말을 끊는다).
+     */
+    override fun onDescribeWithDetailRequested(detailed: Boolean, heard: String?) {
+        if (thinking) {
+            voice.speak(MSG_BUSY)
+            return
+        }
+        val switched = if (detailed) Session.brief else !Session.brief
+        if (switched) changeSoundMode(SoundMode.OFF, emotional = detailed, announce = false)
+        askAgent(
+            InputType.DESCRIBE,
+            heard ?: DESCRIBE_INPUT,
+            lookingSpeech = if (switched) "${soundModeNotice(SoundMode.OFF, detailed)} $MSG_LOOKING" else MSG_LOOKING,
+        )
+    }
+
     /** "소리 켜": 지난 모드가 환경음/배경음이면 그 모드로, 기본 모드이거나 없으면 환경음으로. */
     override fun onSoundOnRequested() {
         activity.lifecycleScope.launch { changeSoundMode(lastSoundMode.modeForSoundOn()) }
@@ -510,18 +549,28 @@ class SeenarioController(
      * 소리 모드를 바꾸고 TTS로 알린 뒤, 지난 모드(휴대폰)와 user_settings.sound_mode(DB)에 저장한다.
      * 이미 같은 환경음/배경음 모드면 모드 안내 없이 지금 장면으로 소리 요청만 다시 보낸다.
      * [soundRequestDelayMs]만큼 기다렸다가 소리 요청을 보낸다(스와이프용. 말로 바꿀 때는 바로).
+     * [announce]가 false면 모드 안내를 읽지 않는다(호출한 쪽이 따로 읽을 때).
+     * [emotional]이면 감성 모드([mode]는 OFF)로 바꾼다. 감성 모드는 DB와 지난 모드에 off로 남는다.
+     * 기본·환경음·배경음 모드로 바꾸면 감성 모드는 풀린다.
      */
-    private fun changeSoundMode(mode: SoundMode, soundRequestDelayMs: Long = 0L) {
+    private fun changeSoundMode(
+        mode: SoundMode,
+        emotional: Boolean = false,
+        soundRequestDelayMs: Long = 0L,
+        announce: Boolean = true,
+    ) {
         val old = Session.soundMode
         val plan = SoundFeedbackPolicy.planModeCommand(old, mode)
+        val toEmotional = emotional && mode == SoundMode.OFF
         Session.soundModeChangedByUser = true
         Session.soundMode = mode
+        Session.emotional = toEmotional
         // 기본 모드로 바뀌거나 환경음 ↔ 배경음으로 바뀌면 지금 소리를 페이드로 멈춘다.
         // 사용자가 직접 말한 명령이므로 요청 순서 규칙과 상관없이 바로 적용한다.
         soundActions.onUserSoundModeChanged(old, mode)
-        if (plan.announceMode) {
+        if (plan.announceMode && announce) {
             // 처음 소리를 켤 때는 모드 안내 뒤에 안전 안내를 이어 읽는다(소리 요청의 응답은 읽지 않으므로).
-            val notice = soundModeNotice(mode)
+            val notice = soundModeNotice(mode, toEmotional)
             voice.speak(if (plan.requestSound && !soundNoticeDone) "$notice $MSG_SOUND_SAFETY" else notice)
         }
         if (plan.sameModeAgain) SoundLog.d("같은 모드 다시 요청: ${mode.wire} (모드 안내 없이 소리 요청을 다시 보냄)")
@@ -611,7 +660,7 @@ class SeenarioController(
     }
 
     /** 사용자 입력을 에이전트로 보낸다. 처리 중이면 안내만 하고 무시한다. */
-    private fun askAgent(type: InputType, input: String) {
+    private fun askAgent(type: InputType, input: String, lookingSpeech: String = MSG_LOOKING) {
         if (thinking) {
             voice.speak(MSG_BUSY)
             return
@@ -622,7 +671,7 @@ class SeenarioController(
                 requestPermissions()
                 return
             }
-            show(TEXT_LOOKING, speech = MSG_LOOKING)
+            show(TEXT_LOOKING, speech = lookingSpeech)
         } else {
             show(TEXT_THINKING, speech = MSG_THINKING)
         }
@@ -641,13 +690,14 @@ class SeenarioController(
                 image = jpeg?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
                 history = Session.history.snapshot(),
                 soundMode = Session.soundMode,
+                detail = if (Session.brief) Detail.BRIEF else Detail.FULL,
             )
             if (BuildConfig.DEBUG) {
                 // 사진은 포함 여부와 크기만 남긴다.
                 val image = if (jpeg != null) "yes(${(jpeg.size + 1023) / 1024}KB)" else "no"
                 Log.d(
                     AGENT_TAG,
-                    "request input_type=${type.wire}, sound_mode=${request.soundMode.wire}, " +
+                    "request input_type=${type.wire}, sound_mode=${request.soundMode.wire}, detail=${request.detail.wire}, " +
                         "history=${request.history.size}, image=$image, power_save=$powerSave",
                 )
             }
@@ -869,8 +919,8 @@ class SeenarioController(
             "권한이 꺼져 있어요. 화면을 누르면 설정 화면을 열게요. 권한에서 카메라와 마이크를 허용해 주세요."
         const val MSG_OPEN_SETTINGS = "설정 화면을 열게요. 권한에서 카메라와 마이크를 허용해 주세요."
 
-        fun soundModeNotice(mode: SoundMode): String = when (mode) {
-            SoundMode.OFF -> "기본 모드로 바꿨어요."
+        fun soundModeNotice(mode: SoundMode, emotional: Boolean = false): String = when (mode) {
+            SoundMode.OFF -> if (emotional) "감성 모드로 바꿨어요." else "기본 모드로 바꿨어요."
             SoundMode.AMBIENT -> "환경음 모드로 바꿨어요."
             SoundMode.MUSIC -> "배경음 모드로 바꿨어요."
         }
@@ -987,6 +1037,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
         StatusPanel(
             status = controller.status,
             soundMode = controller.soundMode,
+            emotional = controller.emotional,
             powerSave = controller.powerSave,
             lastHeard = voiceState.lastHeard,
             modifier = Modifier
@@ -1020,6 +1071,7 @@ fun SeenarioScreen(controller: SeenarioController, modifier: Modifier = Modifier
 private fun StatusPanel(
     status: SeenarioStatus,
     soundMode: SoundMode,
+    emotional: Boolean,
     powerSave: Boolean,
     lastHeard: String?,
     modifier: Modifier = Modifier,
@@ -1038,12 +1090,14 @@ private fun StatusPanel(
             modifier = Modifier.semantics { contentDescription = "현재 상태: ${status.label}" },
         )
         Spacer(Modifier.height(4.dp))
+        // 감성 모드는 소리 모드로는 off지만 화면에는 "감성 모드"로 보여 준다.
+        val modeLabel = if (emotional && soundMode == SoundMode.OFF) EMOTIONAL_MODE_LABEL else soundMode.label
         Text(
-            text = "소리: ${soundMode.label}",
+            text = "소리: $modeLabel",
             fontSize = 20.sp,
             lineHeight = 28.sp,
             color = Color.White,
-            modifier = Modifier.semantics { contentDescription = "현재 소리 모드: ${soundMode.label}" },
+            modifier = Modifier.semantics { contentDescription = "현재 소리 모드: $modeLabel" },
         )
         if (powerSave) {
             Spacer(Modifier.height(4.dp))

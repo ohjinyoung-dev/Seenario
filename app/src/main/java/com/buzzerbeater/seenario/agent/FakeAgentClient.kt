@@ -34,7 +34,7 @@ class FakeAgentClient(
     override suspend fun send(request: AgentRequest): AgentResponse {
         delay(delayMs)
         val text = when (request.inputType) {
-            InputType.DESCRIBE -> DESCRIBE_SAMPLE
+            InputType.DESCRIBE -> if (request.detail == Detail.BRIEF) BRIEF_SAMPLE else DESCRIBE_SAMPLE
             InputType.SPEECH -> "'${request.input}'라고 물어보셨네요. " + SPEECH_SAMPLE
             // 소리만 고르는 요청: 묘사 문장 없이 같은 mode 음원의 play_sound만 돌려준다.
             InputType.SOUND -> return AgentResponse(
@@ -118,6 +118,7 @@ class FakeAgentClient(
         const val DESCRIBE_SAMPLE =
             "창가로 오후 햇살이 비스듬히 들어와 나무 책상 위에 따뜻한 빛을 펼쳐 놓았어요. " +
                 "조용한 방 안에 바깥의 부드러운 바람이 살짝 스며드는 듯한, 느긋한 오후예요."
+        const val BRIEF_SAMPLE = "창가 옆 나무 책상 위에 노트북과 머그컵이 있어요."
         const val SPEECH_SAMPLE =
             "지금은 연습용 답변이에요. 에이전트가 완성되면 주변 모습을 보고 대답해 드릴게요."
     }

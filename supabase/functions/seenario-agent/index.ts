@@ -1,6 +1,7 @@
 // 씨나리오 에이전트. 앱 ↔ 에이전트 약속(CLAUDE.md) 형식으로 요청을 받아 { speech, display, actions }를 돌려준다.
 // - AI는 Gemini만 쓴다. API 키는 Edge Function secret(GEMINI_API_KEY_<이름>, _shared/gemini.ts 참고)에만 둔다.
 // - describe("묘사해줘"): 반복 없이 사진 → Gemini 1번 → 묘사. 사진이 없으면 400(앱이 describe-scene으로 대신 묘사).
+//   detail이 brief(기본 모드)면 1~2문장으로 무엇이 있는지만 짧게 말한다.
 // - speech(그 밖의 말): 생각 → 도구 사용 → 판단을 최대 3번 반복한 뒤 답한다.
 // - sound(소리 모드를 켤 때): 묘사 없이 사진 → Gemini 1번 → 곡 고르기. speech/display는 빈 문자열.
 // - 곡 고르기는 tools/sound.ts를 쓰고, 고른 곡은 actions의 play_sound로 보낸다.
@@ -12,7 +13,14 @@ import { isSignedIn, json, userClient } from "../_shared/http.ts";
 import { describe } from "./describe.ts";
 import { soundOnly } from "./sound_request.ts";
 import { converse } from "./speech.ts";
-import { type AgentContext, AgentError, type AgentRequest, type HistoryItem, type SoundModeOrOff } from "./types.ts";
+import {
+  type AgentContext,
+  AgentError,
+  type AgentRequest,
+  type Detail,
+  type HistoryItem,
+  type SoundModeOrOff,
+} from "./types.ts";
 
 /** 서버 전체 응답 시간. 앱의 20초 안에 describe-scene 대신 묘사 시간이 남도록 짧게 둔다. */
 const TOTAL_DEADLINE_MS = 15_000;
@@ -53,7 +61,10 @@ function parseRequest(body: any): AgentRequest {
   // sound는 소리 모드(ambient/music) 안에서만 곡을 고른다.
   if (inputType === "sound" && soundMode === "off") throw new AgentError(400, "sound_mode_off");
 
-  return { input, input_type: inputType, image, history, sound_mode: soundMode };
+  // 모르는 값이나 빈 값이면 자세한 묘사(full)로 본다.
+  const detail: Detail = body.detail === "brief" ? "brief" : "full";
+
+  return { input, input_type: inputType, image, history, sound_mode: soundMode, detail };
 }
 
 Deno.serve(async (req) => {
@@ -76,7 +87,7 @@ Deno.serve(async (req) => {
     if (!(await isSignedIn(client.supabase, client.token))) return json({ error: "unauthorized" }, 401);
 
     console.log(
-      `agent request input_type=${request.input_type} sound_mode=${request.sound_mode} ` +
+      `agent request input_type=${request.input_type} sound_mode=${request.sound_mode} detail=${request.detail} ` +
         `image=${request.image ? "yes" : "no"} history=${request.history.length}`,
     );
     const ctx: AgentContext = { supabase: client.supabase, request, deadlineAt: started + TOTAL_DEADLINE_MS };

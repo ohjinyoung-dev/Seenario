@@ -19,10 +19,12 @@ import kotlinx.serialization.json.put
 /**
  * 프레임 1장을 Supabase Edge Function `describe-scene`으로 보내 풍경 묘사 문장을 받아온다.
  * Gemini 호출과 API 키는 모두 Edge Function 쪽에만 있다.
+ * [brief]가 true면(기본 모드) `detail: "brief"`를 보내 1~2문장으로 짧게 묘사받는다.
  */
 class SceneDescriber(
     private val supabase: SupabaseClient,
     private val userRepository: UserSettingsRepository = UserSettingsRepository(supabase),
+    private val brief: () -> Boolean = { false },
 ) {
     suspend fun describe(frame: CameraFrame): String {
         // Edge Function이 사용자 토큰을 요구하므로 세션을 먼저 확보한다.
@@ -31,6 +33,7 @@ class SceneDescriber(
         val body = buildJsonObject {
             put("image", Base64.encodeToString(frame.jpeg, Base64.NO_WRAP))
             put("mimeType", frame.mimeType)
+            put("detail", if (brief()) "brief" else "full")
         }
         val startMs = SystemClock.elapsedRealtime()
         val response = supabase.functions.invoke(FUNCTION_NAME) {

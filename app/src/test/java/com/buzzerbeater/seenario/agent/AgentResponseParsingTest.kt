@@ -92,6 +92,14 @@ class AgentResponseParsingTest {
         assertEquals("QUJD", obj.string("image"))
         assertEquals("off", obj.string("sound_mode"))
         assertTrue(obj.getValue("history").jsonArray.isEmpty())
+        assertEquals("full", obj.string("detail"))
+    }
+
+    @Test
+    fun encode_request_briefDetail() {
+        val request = AgentRequest(input = "묘사해줘", inputType = InputType.DESCRIBE, detail = Detail.BRIEF)
+        val obj = Json.parseToJsonElement(AgentJson.encodeRequest(request)).jsonObject
+        assertEquals("brief", obj.string("detail"))
     }
 
     @Test

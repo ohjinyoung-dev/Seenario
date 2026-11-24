@@ -42,6 +42,16 @@ enum class SoundMode(val wire: String, val label: String) {
     }
 }
 
+/** 묘사 길이. 기본 모드면 [BRIEF](1~2문장), 그 밖에는 [FULL](3~4문장). describe에만 쓰인다. */
+@Serializable
+enum class Detail(val wire: String) {
+    @SerialName("brief")
+    BRIEF("brief"),
+
+    @SerialName("full")
+    FULL("full"),
+}
+
 /** 대화 기록 한 줄. */
 @Serializable
 data class HistoryItem(
@@ -64,6 +74,8 @@ data class AgentRequest(
     val image: String? = null,
     val history: List<HistoryItem> = emptyList(),
     @SerialName("sound_mode") val soundMode: SoundMode = SoundMode.OFF,
+    /** 묘사 길이. 기본 모드면 brief. */
+    val detail: Detail = Detail.FULL,
 )
 
 /** 에이전트 응답. [speech]는 TTS로 읽고 [display]는 화면에 보여 준다. */
