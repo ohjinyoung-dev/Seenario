@@ -1,6 +1,7 @@
 package com.buzzerbeater.seenario.sound
 
 import com.buzzerbeater.seenario.agent.SoundMode
+import com.buzzerbeater.seenario.sound.SoundModeSwipe.Mode
 import com.buzzerbeater.seenario.sound.SoundModeSwipe.Touch
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -13,10 +14,13 @@ class SoundModeSwipeTest {
     private fun classify(dx: Float, dy: Float) = SoundModeSwipe.classify(dx, dy, width, tolerance)
 
     @Test
-    fun `다음 모드는 기본 환경음 배경음 순서로 돈다`() {
-        assertEquals(SoundMode.AMBIENT, SoundModeSwipe.next(SoundMode.OFF))
-        assertEquals(SoundMode.MUSIC, SoundModeSwipe.next(SoundMode.AMBIENT))
-        assertEquals(SoundMode.OFF, SoundModeSwipe.next(SoundMode.MUSIC))
+    fun `다음 모드는 기본 감성 환경음 배경음 순서로 돈다`() {
+        val basic = Mode(SoundMode.OFF)
+        val emotional = Mode(SoundMode.OFF, emotional = true)
+        assertEquals(emotional, SoundModeSwipe.next(basic))
+        assertEquals(Mode(SoundMode.AMBIENT), SoundModeSwipe.next(emotional))
+        assertEquals(Mode(SoundMode.MUSIC), SoundModeSwipe.next(Mode(SoundMode.AMBIENT)))
+        assertEquals(basic, SoundModeSwipe.next(Mode(SoundMode.MUSIC)))
     }
 
     @Test

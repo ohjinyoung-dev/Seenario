@@ -59,6 +59,19 @@ export function describeInstruction(soundOn: boolean): string {
 ${SOUND_FIELDS_GUIDE}`;
 }
 
+/** describe(기본 모드): 무엇이 있는지만 1~2문장으로 짧게. */
+export function briefDescribeInstruction(soundOn: boolean): string {
+  const base = "지금은 짧게 알려 주는 기본 모드야. 분위기 묘사 대신, 사진에 무엇이 있는지 1~2문장으로 짧게 알려 줘. " +
+    "어떤 장소인지와 눈에 띄는 주요 사물 위주로, 꾸밈말 없이 바로 말해. " +
+    "발밑의 장애물처럼 안전에 중요한 것이 보이면 그것을 먼저 말해. " +
+    "speech에 그 문장을 넣어.";
+  if (!soundOn) return base;
+  return base + `
+
+추가로, 이 장면에 어울리는 소리를 고르기 위한 값도 골라 줘.
+${SOUND_FIELDS_GUIDE}`;
+}
+
 /** sound: 묘사 문장 없이 소리를 고르기 위한 값만 뽑는다. */
 export function soundInstruction(): string {
   return `너는 시각장애인을 위한 앱 '씨나리오'에서 지금 공간에 어울리는 소리를 고르는 역할이야.

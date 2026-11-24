@@ -9,6 +9,12 @@ enum class VoiceCommand {
     SOUND_AMBIENT,
     /** 배경음 모드(music)로 바꾸기. */
     SOUND_MUSIC,
+    /** 감성 모드(소리 없이 3~4문장 감성 묘사)로 바꾸기. 묘사는 하지 않는다. */
+    EMOTIONAL_MODE,
+    /** "간단하게 묘사해줘" 등. 기본 모드(1~2문장)가 아니면 기본 모드로 바꾸고 바로 묘사한다. */
+    BRIEF_DESCRIBE,
+    /** "자세히 묘사해줘" 등. 기본 모드면 감성 모드로 바꾸고 바로 자세히 묘사한다. */
+    DETAILED_DESCRIBE,
     /** 앱 설정(시스템 앱 정보) 화면 열기. */
     OPEN_SETTINGS,
     /** 대화 기록 초기화. */

@@ -27,6 +27,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - "소리 꺼", "기본 모드(로 가줘/돌아가)", "소리 없이": 기본 모드(`off`)로 바꾼다. 화면과 안내에서는 `off`를 "기본 모드"라고 부른다.
    - "기본으로", "조용히": 명령처럼 말할 때만 기본 모드로 바꾸고("조용히 해줘", "기본으로 돌아가" 등), 질문이면 에이전트로 보낸다("여기 조용히 해야 하는 곳이야?" 등).
    - "소리 켜": 지난 모드가 `ambient`/`music`이면 그 모드로, `off`이거나 없으면 환경음으로 켠다.
+   - 소리 없는 모드는 두 가지다(둘 다 `sound_mode` `off`). 묘사는 둘 다 TTS로 읽고, 질문 답변(speech)은 모드와 상관없이 같다.
+     - **기본 모드(심플)**: 묘사를 1~2문장으로 짧게(사진에 무엇이 있는지 위주) 한다. 앱을 켜면 이 모드로 시작한다.
+     - **감성 모드**: 지금까지의 묘사처럼 3~4문장으로 분위기를 감성적으로 묘사한다. 환경음·배경음 모드의 묘사도 3~4문장이다.
+     - "심플 모드", "간단 모드"도 기본 모드 명령이다. "감성 모드": 감성 모드로(모드만 바꿈).
+     - "간단하게/간단히/짧게 묘사해줘", "간단하게/간단히/짧게 말해줘": 기본 모드가 아니면 기본 모드로 바꾸고(소리도 멈춤) 바로 짧게 묘사한다.
+     - "자세히/자세하게 묘사해줘", "자세히/자세하게 말해줘": 기본 모드면 감성 모드로 바꾸고 바로 자세히 묘사한다. 환경음·배경음 모드에서는 모드를 그대로 두고 묘사만 한다.
+     - 모드를 바꾸며 묘사하면 안내를 한 번에 읽는다(예: "감성 모드로 바꿨어요. 잠시만요, 주변을 살펴볼게요."). "간단"·"자세히"만 있는 말은 에이전트로 보낸다.
+     - 감성 모드는 앱 상태(`Session.emotional`)로만 두고 저장하지 않는다. DB `sound_mode`와 지난 모드에는 `off`로 남는다. 다른 모드 명령(기본·환경음·배경음·소리 켜)을 쓰면 풀린다.
+     - 기본 모드면 에이전트 요청과 `describe-scene` 대신 묘사에 `detail: "brief"`, 그 밖에는 `"full"`을 보낸다. 화면 위쪽에는 "소리: 기본 모드" / "소리: 감성 모드"로 표시한다.
+   - 화면을 가로로 밀면(방향 상관없음) 다음 모드로 바꾼다: 기본 → 감성 → 환경음 → 배경음 → 기본(`sound/SoundModeSwipe`).
    - 모드를 바꾸면 TTS로 "환경음 모드로 바꿨어요"처럼 알리고 `user_settings.sound_mode`(DB)에 저장한다. 바꾼 모드(`off` 포함)는 "지난 모드"로 휴대폰 DataStore에도 저장한다. 화면 위쪽에 현재 소리 모드를 표시한다.
    - 앱을 켜면 항상 기본 모드로 시작하고 DB `sound_mode`도 `off`로 저장한다(지난 모드에는 기록하지 않음). 지난 모드가 `ambient`/`music`이면 시작 안내 끝에 "지난번에는 환경음 모드를 쓰셨어요. '환경음 켜'라고 말하면 다시 켜져요."(배경음이면 배경음)를 붙인다. 음성 인식을 못 쓰는 기기에는 붙이지 않는다.
 5. 휴대폰 명령이 아니면 에이전트(`agent/`)로 보낸다. "묘사해줘"는 `describe`, 나머지 말은 `speech`. 최근 대화 6개(메시지 기준)와 현재 `sound_mode`를 같이 보낸다.
@@ -93,9 +103,9 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
 
 - 기본 모드(묘사)와 대화 모드를 하나로 합친다. 앱은 사용자 입력과 최신 카메라 사진을 Edge Function `seenario-agent`로 보낸다. 에이전트는 생각 → 도구 사용 → 판단을 최대 3번 반복한 뒤 답한다.
 - 사진 촬영과 소리 재생은 앱이 맡는다. 서버는 응답의 `actions`로 무엇을 할지 지시만 한다.
-- `seenario-agent`(서버 15초 제한)는 지금 **Gemini만** 쓴다. describe는 반복 없이 사진 → Gemini 1번 → 묘사이고, 사진이 없으면 400 `image_required`라서 앱이 `describe-scene`으로 대신 묘사한다. speech는 Gemini 함수 호출로 최대 3번 반복하며, 소리 모드가 켜져 있으면 `pick_sound`/`stop_sound` 도구를 준다. sound(`sound_request.ts`)는 반복 없이 사진 → Gemini 1번(`tags`, `existing_sounds`만) → 곡 고르기이고, `speech`/`display`는 빈 문자열이다. `sound_mode`가 `off`면 400 `sound_mode_off`, 사진이 없으면 400 `image_required`. 곡 고르기는 describe·speech·sound 모두 `tools/sound.ts`를 쓰고, 고른 곡은 `actions`의 `play_sound`(volume 0.4)로 보낸다.
+- `seenario-agent`(서버 15초 제한)는 지금 **Gemini만** 쓴다. describe는 반복 없이 사진 → Gemini 1번 → 묘사이고(`detail`이 `brief`면 1~2문장), 사진이 없으면 400 `image_required`라서 앱이 `describe-scene`으로 대신 묘사한다. speech는 Gemini 함수 호출로 최대 3번 반복하며, 소리 모드가 켜져 있으면 `pick_sound`/`stop_sound` 도구를 준다. sound(`sound_request.ts`)는 반복 없이 사진 → Gemini 1번(`tags`, `existing_sounds`만) → 곡 고르기이고, `speech`/`display`는 빈 문자열이다. `sound_mode`가 `off`면 400 `sound_mode_off`, 사진이 없으면 400 `image_required`. 곡 고르기는 describe·speech·sound 모두 `tools/sound.ts`를 쓰고, 고른 곡은 `actions`의 `play_sound`(volume 0.4)로 보낸다.
 - Edge Function 공용 코드는 `supabase/functions/_shared/`에 있다: `gemini.ts`(여러 키 × 모델 시간차 호출. 키는 secret `GEMINI_API_KEY_<이름>`(또는 `GEMINI_KEY_<이름>`)마다 하나씩 두고, DB·로그에는 이름(예: `ojy1`)만 남긴다. 키는 모델마다 오늘(태평양 시간) 성공 요청이 가장 적은 것부터 쓴다. 모델 후보 순서는 secret `GEMINI_MODELS`로 바꿀 수 있고, 없으면 무료 한도가 넉넉한 Flash Lite부터 부른다. 2.5초 안에 답이 없으면 다음 모델을 같이 출발시킨다. 503·응답 없음(8초 넘게 답이 없다가 취소)·시간 초과는 그 모델을 모든 키에서 10분, 429는 그 키×모델만 Google이 알려 준 시간(하루 한도면 태평양 자정)까지, 키 오류(401/402 결제·크레딧/403/잘못된 키)는 그 키를 1시간 건너뛴다. 429·키 오류면 같은 모델을 다음 키로 바로 다시 부른다. 생각 단계를 지원하지 않는 모델은 낮춰서 다시 보낸다), `model_status.ts`(키×모델별 건너뛰기와 오늘 요청 수·토큰 수를 테이블 `gemini_model_status`에 두어 모든 인스턴스가 함께 본다. `key_name`/`model`의 `*`는 "모든 키/모든 모델". 사용량 더하기는 DB 함수 `gemini_record_usage()`. service role로만 접근), `http.ts`(응답, 사용자 확인), `sound_pick.ts`(describe-scene의 음원 선택), `sound_tags.ts`.
-- 기존 `describe-scene`은 대신 묘사용으로 남긴다. 현재 `describe-scene`은 `{ description, model }`을 돌려준다. `user_settings.sound_mode`가 `ambient`/`music`이면 `soundMode`, `tags`(`SOUND_TAGS` 값), `sound`도 함께 돌려준다. `sound`는 `{ id, title, mode, url(1시간 signed URL), loopable, tags }` 형태이고, 고르지 못하면 `null`이다. 앱(`SceneDescriber`)은 아직 이 값들을 로그로만 남긴다.
+- 기존 `describe-scene`은 대신 묘사용으로 남긴다. 요청 본문의 선택 `detail`이 `"brief"`면 1~2문장으로 묘사한다. 현재 `describe-scene`은 `{ description, model }`을 돌려준다. `user_settings.sound_mode`가 `ambient`/`music`이면 `soundMode`, `tags`(`SOUND_TAGS` 값), `sound`도 함께 돌려준다. `sound`는 `{ id, title, mode, url(1시간 signed URL), loopable, tags }` 형태이고, 고르지 못하면 `null`이다. 앱(`SceneDescriber`)은 아직 이 값들을 로그로만 남긴다.
 
 ### 앱 ↔ 에이전트 약속
 
@@ -107,10 +117,12 @@ Runtime logs use the Logcat tag `SEENARIO` (e.g. `adb logcat -s SEENARIO`).
   "input_type": "speech | describe | sound",
   "image": "base64 JPEG",
   "history": [{ "role": "user | agent", "text": "string" }],
-  "sound_mode": "off | ambient | music"
+  "sound_mode": "off | ambient | music",
+  "detail": "brief | full (선택, 없으면 full)"
 }
 ```
 
+- `detail`은 묘사 길이다. 기본 모드면 `brief`(1~2문장), 감성·환경음·배경음 모드면 `full`(3~4문장). describe에만 쓰인다.
 - 소리 모드는 사용자가 말로 고르며 기본값은 `off`다. 에이전트는 고른 모드 안에서만 음원을 고른다.
 
 응답:
